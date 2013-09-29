@@ -1,0 +1,5 @@
+#!/usr/bin/env python
+
+import virana.vmap
+
+virana.vmap.CLI.run()
