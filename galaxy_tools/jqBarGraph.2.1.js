@@ -479,7 +479,7 @@
                 hei=$('.files'+elid).height();
                 hei=parseInt(hei)+10;
                 hei=hei>400? hei=400 : hei;
-                $('.files'+elid).css({'height': curr_hei+'px', 'width':'915px','position':'relative', 'overflow' : 'auto','background-color':'rgb(223, 229, 249)', 'border':'2px solid silver', 'display':'block' }).animate({'height':hei+'px'}, 1000);	           
+                $('.files'+elid).css({'height': curr_hei+'px', 'width':wi+'px','position':'relative', 'overflow' : 'auto','background-color':'rgb(223, 229, 249)', 'border':'2px solid silver', 'display':'block' }).animate({'height':hei+'px'}, 1000);	           
             }
 	};
 
@@ -488,7 +488,11 @@
             var div = document.getElementById("image" + elid);
             div.innerHTML="";
             out="<div><H3>Consensus Image for Region "+region+"</H3></div>";
-            out+="<img id='image_file"+elid+"' src="+consensus_image+" alt="+consensus_image+" style='width:auto;'>";
+            newImg= new Image();
+            newImg=consensus_image
+            wid=newImg.naturalWidth
+            hig=newImg.naturalHeight
+            out+="<img id='image_file"+elid+"' src="+consensus_image+" alt="+consensus_image+" style='width:"+wid+";height:"+hig+";'>";
             $(div).append(out)
      
      

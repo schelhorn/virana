@@ -44,7 +44,7 @@
     
     --output_dir ${hom_output.files_path}
     
-    --jalview_jar_dir $__root_dir__/tool-data/shared/jalview
+    --jalview_jar_dir \$JALVIEW_DIR
     
     
     --region_stats $stat_output

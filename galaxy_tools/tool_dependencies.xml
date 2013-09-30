@@ -2,7 +2,7 @@
     <package name="virana_python" version="1.0">
         <install version="1.0">
             <actions>
-                <action type="download_by_url">https://github.com/zeidlermicha/virana/raw/master/Virana-1.0.0.tar.gz</action>
+                <action type="download_by_url">git clone -b master https://github.com/schelhorn/virana.git</action>
                 <action type="make_directory">$INSTALL_DIR/lib/python</action>
                 <action type="shell_command">export PYTHONPATH=$PYTHONPATH:$INSTALL_DIR/lib/python &amp;&amp; python setup.py install --home $INSTALL_DIR --install-scripts $INSTALL_DIR/bin</action>
                 <action type="set_environment">
@@ -77,4 +77,25 @@
             </actions>
         </install>
     </package>
+    <package name="jalview" version="2.8" >
+        <install version="1.0">
+            <actions>
+                <action type="shell_command">git clone -b jalview https://github.com/schelhorn/virana.git</action>
+                <action type="shell_command">echo $PWD</action>
+                <action type="shell_command">mkdir $INSTALL_DIR/lib</action>
+                <action type="move_file">
+                         <source>../virana/jalview/jalview.jar</source>
+                         <destination>$INSTALL_DIR</destination>
+                </action>
+                <action type="move_directory_files">
+                         <source_directory>../virana/jalview/lib</source_directory>
+                         <destination_directory>$INSTALL_DIR/lib</destination_directory>
+                </action>
+                <action type="set_environment">
+                    <environment_variable name="JALVIEW_DIR" action="set_to">$INSTALL_DIR</environment_variable>
+                </action>
+            </actions>
+        </install>
+    </package>
+
 </tool_dependency>
