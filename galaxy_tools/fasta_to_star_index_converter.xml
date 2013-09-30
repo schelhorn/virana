@@ -1,0 +1,19 @@
+<tool id="vmap_rnaindex" name="Virana RNAIndex" version="1.0.0">
+    <description>Creates a STAR index from a FASTA genome reference.</description>
+    <requirements>
+        <requirement type="package" version="2.3.0">STAR</requirement>
+        <requirement type="package" version="0.1.19">samtools</requirement>
+        <requirement type="package" version="1.0">virana_python</requirement>
+
+    </requirements>
+    <command interpreter="python">vmap_rnaindex.py --html_file $output --dir ${output.files_path} --index_dir ${output.files_path} --reference_file $input 2&gt;&amp;1 </command>
+    
+    <inputs>
+        <param name="input" format="fasta" type="data" label="Fasta file" help="Fasta reference file to create the index for."/>
+    </inputs>
+    
+    <outputs>
+        <data name="output" format="star_index"/>
+    </outputs>
+
+</tool>

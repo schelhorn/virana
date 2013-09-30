@@ -1,0 +1,19 @@
+<tool id="vmap_dnaindex" name="Virana DNAIndex" version="1.0.0">
+    <description>Creates a BWA index from a FASTA reference file.</description>
+    <requirements>
+        <requirement type="package" version="0.7.4">bwa</requirement>
+        <requirement type="package" version="0.1.19">samtools</requirement>
+        <requirement type="package" version="1.0">virana_python</requirement>
+
+    </requirements>
+    <command interpreter="python">vmap_dnaindex.py --html_file $output --index_dir ${output.files_path} --dir ${output.files_path}  --reference_file $input 2&gt;&amp;1 </command>
+    
+    <inputs>
+        <param name="input" format="fasta" type="data" label="Fasta file" help="Fasta reference file to create the index for."/>
+    </inputs>
+    
+    <outputs>
+        <data name="output" format="bwa_index"/>
+    </outputs>
+
+</tool>

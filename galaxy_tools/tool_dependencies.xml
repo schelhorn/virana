@@ -1,0 +1,80 @@
+<tool_dependency>
+    <package name="virana_python" version="1.0">
+        <install version="1.0">
+            <actions>
+                <action type="download_by_url">https://github.com/zeidlermicha/virana/raw/master/Virana-1.0.0.tar.gz</action>
+                <action type="make_directory">$INSTALL_DIR/lib/python</action>
+                <action type="shell_command">export PYTHONPATH=$PYTHONPATH:$INSTALL_DIR/lib/python &amp;&amp; python setup.py install --home $INSTALL_DIR --install-scripts $INSTALL_DIR/bin</action>
+                <action type="set_environment">
+                    <environment_variable name="PYTHONPATH" action="append_to">$INSTALL_DIR/lib/python</environment_variable>
+                    <environment_variable name="PATH" action="prepend_to">$INSTALL_DIR/bin</environment_variable>
+                </action>
+            </actions>
+        </install>
+    </package>
+    <package name="samtools" version="0.1.19">
+        <install>
+            <actions>
+                <action type="download_by_url">http://sourceforge.net/projects/samtools/files/samtools/0.1.19/samtools-0.1.19.tar.bz2</action>
+                <action type="shell_command">make</action>
+                <action type="move_file">
+                    <source>samtools</source>
+                    <destination>$INSTALL_DIR/bin</destination>
+                </action>
+                <action type="set_environment">
+                    <environment_variable name="PATH" action="prepend_to">$INSTALL_DIR/bin</environment_variable>
+                </action>
+            </actions>
+        </install>
+    </package>
+    <package name="bwa" version="0.7.4">
+        <install version="1.0">
+            <actions>
+                <action type="download_by_url">http://sourceforge.net/projects/bio-bwa/files/bwa-0.7.4.tar.bz2 </action>
+                <action type="shell_command">make</action>
+                <action type="move_file">
+                    <source>bwa</source>
+                    <destination>$INSTALL_DIR/bin</destination>
+                </action>
+                <action type="set_environment">
+                    <environment_variable name="PATH" action="prepend_to">$INSTALL_DIR/bin</environment_variable>
+                </action>
+            </actions>
+        </install>
+    </package>
+    
+    <package name="STAR" version="2.3.0" >
+        <install version="1.0">
+            <actions>
+                <action type="download_by_url">https://rna-star.googlecode.com/files/STAR_2.3.0e.tgz</action>
+                <action type="move_file">
+                    <source>STAR</source>
+                    <destination>$INSTALL_DIR/bin</destination>
+                </action>
+                <action type="set_environment">
+                    <environment_variable name="PATH" action="prepend_to">$INSTALL_DIR/bin</environment_variable>
+                </action>
+            </actions>
+        </install>
+    
+    </package>
+    <package name="lastz" version="1.02.00" >
+        <install version="1.0">
+            <actions>
+                <action type="download_by_url" target_filename="lastz-distrib-1.02.00.tar.gz">http://www.bx.psu.edu/miller_lab/dist/lastz-1.02.00.tar.gz</action>
+                <action type="shell_command">make</action>
+                <action type="move_file">
+                         <source>src/lastz</source>
+                         <destination>$INSTALL_DIR/bin</destination>
+                     </action>
+                     <action type="move_file">
+                         <source>src/lastz_D</source>
+                         <destination>$INSTALL_DIR/bin</destination>
+                     </action>
+                <action type="set_environment">
+                    <environment_variable name="PATH" action="prepend_to">$INSTALL_DIR/bin</environment_variable>
+                </action>
+            </actions>
+        </install>
+    </package>
+</tool_dependency>

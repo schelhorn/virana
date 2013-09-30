@@ -1,0 +1,89 @@
+<tool id="vhom_region" name="Virana Homologous Groups" version="1.1.1">
+
+<description>Derive homologous groups and regions from hit files. </description>
+
+	<requirements>
+        <requirement type="package" version="1.02.00">lastz</requirement>
+        <requirement type="package" version="1.0">virana_python</requirement>
+        <requirement type="package" version="2.8">jalview</requirement>
+    </requirements>
+
+    <command interpreter="python">vhom_regionplot.py --html_file $hom_output --directory ${hom_output.files_path} --stats $stat_output
+    
+    --virana_hits $virana_hits
+    
+    #if $cdna
+        --cdna $cdna
+    #end if
+    
+    --references $references
+    
+    --ambiguity_cutoff $ambiguity_cutoff
+    
+    --max_gap_length $max_gap_length
+    
+    --min_read_number $min_read_number
+    
+    --word_length $word_length
+    
+    --min_region_length $min_region_length
+    
+    #if $reference_database_filter
+        #set $groups = str($reference_database_filter).split(",")
+        
+        #for $ref in $groups
+            --reference_database_filter $ref
+        #end for
+    #end if
+    
+    #for $i, $s in enumerate( $filter )
+        
+        --pathogen_family_filter $s
+        
+    #end for
+    
+    --output_dir ${hom_output.files_path}
+    
+    --jalview_jar_dir $__root_dir__/tool-data/shared/jalview
+    
+    
+    --region_stats $stat_output
+    </command>
+    
+    
+    <inputs>
+        
+        <param name="virana_hits" type="data" format="hit_bz2" label="Add hit file for analysis" />
+        
+        <param name="cdna" type="data" format="fasta" optional="True" label="Input fasta file containing human cDNA records" />
+        
+        <param name="references" type="data" format="fasta" label="Input fasta file containing genomic references of pathogens" />
+        
+        <param name="ambiguity_cutoff" type="float" min="0" max="1" value="0.3" label="Ambiguity Cutoff" />
+        
+        <param name="max_gap_length" type="integer" min="1" max="1000" value="25" label="Max Gap Length" />
+        
+        <param name="min_read_number" type="integer" min="1" max="1000" value="5" label="Min Read Number" />
+        
+        <param name="word_length" type="integer" min="1" max="21" value="7" label="Word length" />
+        
+        <param name="min_region_length" type="integer" min="1" max="1000" value="50" label="Min Region length" />
+        
+        <param name="reference_database_filter" type="select" optional="true" multiple="true" display="checkboxes" label="Specify Reference Database to use">
+            <option value="nr">nr</option>
+            <option value="nt">nt</option>
+        </param>
+        
+        <repeat name="filter" title="Pathogen Family Filter">
+            <param name="pathogen_family_filter" type="text" size="20" optional="true" label="Specifies which kind of pathogen families are consisdered when extracting hits"/>
+        </repeat>
+    
+    </inputs>
+    
+    
+    <outputs>
+        <data format="hom_reg" name="hom_output" label="" />
+        <data format="reg_stats" name="stat_output" label="" /> 
+    </outputs>
+ 
+</tool>    

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+      <datatypes>
+          <registration>
+              <datatype extension="hit" type="galaxy.datatypes.sequence:Fasta" display_in_upload="true" subclass="True"/>
+              <datatype extension="hit_bz2" type="galaxy.datatypes.binary:Binary" display_in_upload="true" subclass="True"/>
+      
+              <datatype extension="qual" type="galaxy.datatypes.tabular:Tabular" display_in_upload="true" subclass="True"/>
+              <datatype extension="tax" type="galaxy.datatypes.tabular:Tabular" display_in_upload="true" subclass="True"/>
+              <datatype extension="bwa_index" type="galaxy.datatypes.images:Html" mimetype="text/html" display_in_upload="False" subclass="True"/>
+              <datatype extension="star_index" type="galaxy.datatypes.images:Html" mimetype="text/html" display_in_upload="False" subclass="True"/>
+
+              <datatype extension="reg_stats" type="galaxy.datatypes.tabular:Tabular" display_in_upload="true" subclass="True"/>
+              <datatype extension="hom_reg" type="galaxy.datatypes.images:Html" mimetype="text/html" display_in_upload="False" subclass="True"/>
+             
+          </registration>
+     </datatypes>

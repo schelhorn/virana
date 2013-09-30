@@ -1,0 +1,38 @@
+<tool id="vref_blast" name="Virana Blast References">
+
+<description>Obtains blast databases. </description>
+
+	<requirements>
+        <requirement type="package" version="1.0">virana_python</requirement>
+
+
+    </requirements>
+
+    <command interpreter="python">vref.py blast --output_path $output 
+    
+    #if $database
+        #set $groups = str($database).split(",")
+        #for $ref in $groups:
+            --reference_database $ref
+        #end for
+    #end if
+    
+    
+    </command>
+    
+    
+    <inputs>
+        <param name="database" type="select" label="choose BLAST databases" multiple="true" display="checkboxes">
+            <option value="nr">nr</option>
+            <option value="nt">nt</option>
+        </param>
+
+    
+    </inputs>
+    
+        
+    <outputs>
+        <data format="blastdb" name="output" label="blast_ref.blastdb"/>
+    </outputs>
+
+</tool>

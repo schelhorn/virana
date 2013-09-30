@@ -1,0 +1,160 @@
+<tool id="vmap_dnamap" name="Virana DNAMap">
+
+<description>Map input reads against a BWA index. </description>
+
+	<requirements>
+        
+        <requirement type="package" version="0.1.19">samtools</requirement>
+        <requirement type="package" version="0.7.4">bwa</requirement>
+        <requirement type="package" version="1.0">virana_python</requirement>
+
+    </requirements>
+
+    <command interpreter="python">vmap.py dnamap
+    
+    
+    
+    --reads $reads
+    
+    #if $paired.select_paired == "paired"
+        --reads $paired.paired_read
+    #end if
+    
+    #if $refseq
+        #set $groups = str($refseq).split(",")
+        #for $ref in $groups:
+            --virana_hit_filter $ref
+        #end for
+    #end if
+        
+
+        #if $bam
+            --bam $bam_output
+        #end if
+        
+        #if $sam
+            --sam $sam_output
+        #end if
+        
+        #if $output_type.hit
+            --virana_hits $hit_output
+            
+            $output_type.filter_complexity
+                       
+            #if $output_type.max_mismatches
+                --max_mismatches $output_type.max_mismatches
+            #end if
+            
+            #if $output_type.max_relative_mismatches
+                --max_relative_mismatches $output_type.max_relative_mismatches
+            #end if
+            
+            #if $output_type.min_alignment_score
+                --min_alignment_score $output_type.min_alignment_score
+            #end if
+            
+            #if $output_type.min_continiously_matching
+                --min_continiously_matching $output_type.min_continiously_matching
+            #end if
+            
+            #if $output_type.min_mapping_score
+                --min_mapping_score $output_type.min_mapping_score
+            #end if
+       #end if
+       #if $qual
+            --qual $qual_output 
+       #end if
+        #if $tax
+            --taxonomy $tax_output  
+        #end if
+    
+    
+    #if $sample_id:
+        --sample_id $sample_id
+    #end if 
+    
+    --index_dir $index.extra_files_path
+    
+    $sensitive
+    
+    2&gt;&amp;1
+        
+    </command>
+    
+    <inputs>
+        <param name="reads" type="data" format="fastq" label="Read file" help="input read file"/>
+        
+        <conditional name="paired">
+            <param name="select_paired" type="select" label="Paired end reads?" help="Set to 'paired end' in case of paired end read input.">
+                <option value="single">single end</option>
+                <option value="paired">paired end</option>
+            </param>
+            
+           <when value="paired">
+                <param name="paired_read" type="data" format="fastq" label="Paired end read file" help="input paired end read file" />
+           </when>
+        
+        </conditional>
+        <conditional name="output_type">
+            <param name="hit" type="boolean" label="Hit Output" checked="true" help="check this box for output of virana hit file"/>
+                           
+            <when value="true">
+                <param name="max_mismatches" type="integer" min="0" max="10000000"  optional="true" label="Maximum number of mismatches for saved hits" />
+                <param name="max_relative_mismatches" type="float" min="0" max="1" optional="true" label="Maximum number of mismatches relative to read length for saved hits " />
+                <param name="min_continiously_matching" type="integer" min="0" max="10000000" optional="true" label="Minimum number of continious matches for saved hits"  />
+                <param name="min_mapping_score" type="integer" min="1" max="255"  optional="true" label="Mimimum mapping score for saved hit"  />        
+                <param name="filter_complexity" type="boolean" truevalue="--filter_complexity" falsevalue="" label="Discard low-complexity reads"/>
+                <param name="min_alignment_score" type="integer" min="0" max="255" optional="true" label="Mimimum alignment score for reported hits"/>
+
+            </when>
+        
+        </conditional>
+        
+        <param name="bam" type="boolean" label="BAM Output" help="check this box for output of unsorted, unindexed BAM file"/>
+        <param name="sam" type="boolean" label="SAM Output" help="check this box for output of SAM file"/>
+        <param name="qual" type="boolean"  label="Quality Output" help="check this box  for output of quality file"/>
+        <param name="tax" type="boolean"  label="Taxonomy Output" help="check this box for output of taxonomy file"/>
+        
+        <param name="refseq" type="select" label="Set RefSeq taxonomic groups" multiple="true" display="checkboxes" optional="true" help="Only generate hit groups that include at last one read mapping to a reference of this reference group">
+            <option value="UniVec">UniVec</option>
+            <option value="rRNA">rRNA</option>
+            <option value="Homo_sapiens">Homo sapiens</option>
+            <option value="Fungi">Fungi</option>
+            <option value="Plasmids">Plasmids</option>
+            <option value="Protozoa">Protozoa</option>
+            <option value="Viruses">Viruses</option>
+            <option value="Homo_sapiens_cDNA">Homo sapiens cDNA</option>
+            <option value="Fungi_DRAFT">Fungi DRAFT</option>
+            <option value="Bacteria">Bacteria</option>
+            <option value="Bacteria_DRAFT">Bacteria DRAFT</option>
+        </param>
+        
+        <param name="index" type="data" format="bwa_index" label="BWA Index files" help="BWA Index files to map the reades against."/>
+        
+        <param name="sample_id" type="text" optional="true" label="String used to designate sample information within the hit file"/>
+        
+        
+        
+        <param name="sensitive" type="boolean" truevalue="--sensitive" falsevalue="" label="If given, mapping will process slower and more sensitive"/>
+
+    </inputs>
+    
+    
+    <outputs>
+        <data format="hit_bz2" name="hit_output" label="">
+            <filter>output_type['hit']</filter>
+        </data>
+        <data format="bam" name="bam_output" label="" >
+            <filter>bam</filter>
+        </data>
+        <data format="sam" name="sam_output" label="">
+            <filter>sam</filter>
+        </data>
+        <data format="qual" name="qual_output" label="" >
+            <filter>qual</filter>
+        </data>
+        <data format="tax" name="tax_output" label="" >
+            <filter>tax</filter>
+        </data>
+    </outputs>
+</tool>

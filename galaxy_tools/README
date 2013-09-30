@@ -1,0 +1,27 @@
+***Virana***
+
+**The Virus Analysis Toolkit**
+
+Virana is a GNU/Linux toolbox and python library for performing next-generation sequence analyses on viral targets.
+
+
+**Licence**
+
+For licence information see https://github.com/schelhorn/virana/raw/master/LICENSE
+
+**Installation**
+
+Using the virana tool shed repository, all dependencies are installed automatically except 'jalview'.
+Make sure to copy the jalview directory, contained in the repository, into the <galaxy root>/tool-data/shared/ directory.
+
+*Manual Installation*
+
+For manual installation see https://github.com/schelhorn/virana/raw/master/INSTALL
+
+**Usage**
+
+There is an example workflow in the virana tool shed repository. Feel free to import the workflow and get familiar with the usage of the toolkit.
+We also provide example datasets for testing here https://github.com/schelhorn/virana/raw/master/test_data. 
+
+ 
+ 

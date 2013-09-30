@@ -1,0 +1,49 @@
+<tool id="vref_fasta" name="Virana References">
+
+<description>Obtains NCBI RefSeq and Ensembl reference genomes. </description>
+
+	<requirements>
+        <requirement type="package" version="1.0">virana_python</requirement>
+
+
+    </requirements>
+
+    <command interpreter="python">vref.py fasta --output_file $output 
+        
+    #if $refseq
+        #set $groups = str($refseq).split(",")
+        #for $ref in $groups:
+            --reference $ref
+        #end for
+    #end if
+    
+    
+    $zipped
+       
+    2&gt;&amp;1
+    </command>
+    
+    <inputs>
+        <param name="refseq" type="select" label="Set RefSeq taxonomic groups" multiple="true" display="checkboxes">
+            <option value="UniVec">UniVec</option>
+            <option value="rRNA">rRNA</option>
+            <option value="Homo_sapiens">Homo sapiens</option>
+            <option value="Fungi">Fungi</option>
+            <option value="Plasmids">Plasmids</option>
+            <option value="Protozoa">Protozoa</option>
+            <option value="Viruses">Viruses</option>
+            <option value="Homo_sapiens_cDNA">Homo sapiens cDNA</option>
+            <option value="Fungi_DRAFT">Fungi DRAFT</option>
+            <option value="Bacteria">Bacteria</option>
+            <option value="Bacteria_DRAFT">Bacteria DRAFT</option>
+        </param>
+        
+        <param name="zipped" type="boolean" label="check for zipped output?" truevalue="--zipped" falsevalue=""/>
+
+    </inputs>
+    
+    
+    <outputs>
+        <data format="fasta" name="output" label="references.fasta"/>
+    </outputs>
+</tool>
