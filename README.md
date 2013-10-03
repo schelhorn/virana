@@ -3,6 +3,8 @@ Virana
 
 The Virus Analysis Toolkit
 
+Note: We are currently expanding this readme in order to include analysis recommendations for various scenarios. A version of this tool for the workflow engine `Galaxy` that automatically satifies all dependencies during installation is also available at http://testtoolshed.g2.bx.psu.edu/view/mzeidler/virana_main
+
 ### Summary
 
 Virana, _the virus analysis toolkit_, is a Python-based software toolkit for analyzing metatranscriptomic (and, to a degree, metagenomic) sequence data in a contaxt of clinical metagenomics in order to:
