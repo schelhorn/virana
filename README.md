@@ -7,10 +7,10 @@ The Virus Analysis Toolkit
 
 Virana, _the virus analysis toolkit_, is a Python-based software toolkit for analyzing metatranscriptomic (and, to a degree, metagenomic) sequence data in a contaxt of clinical metagenomics in order to:
 
-- identify pathogen nucleotide sequences in short read data
-- identify pathogen transcripts diverged from known references
-- identify transcript expressed at low abundances
-- identify transcripts homologous to human factors
+- identify pathogen nucleotide sequences in transcriptomc (and, while less tested, genomic) short read data
+- identify pathogen transcripts diverged from known references of various microbial species
+- identify transcripts expressed at low abundances across multiple samples
+- identify transcripts homologous to human factors such as certain viral oncogenes
 
 Depending on the branch you choose, virana is available either in a locally executable version or as a tool for the workflow engine  `Galaxy`.
 
@@ -50,7 +50,7 @@ Here, we may also mention additional outputs; for example, providing `-x taxonom
 Last, the mappings are analyzed within their homologous context and regions that correspond to factors that are either of clearly pathogen origin OR that are homologs to both human and pathogen are reconstructed from the mappings in a greedy micro-assembly. These regions allow for either automatic or manual analysis in order to determine the true origin of the reads.
 
 ```shell
-  vmap regions --references my_reference_db.fa --cdna my_transcriptome_db.fa --output_dir viral_families --region_stats output_statistics.txt --virana_hits virana_output.bz2
+  vhom regions --references my_reference_db.fa --cdna my_transcriptome_db.fa --output_dir viral_families --region_stats output_statistics.txt --virana_hits virana_output.bz2
 ```
 
 Within the output directory `viral_families`, subdirectories are generated for each viral taxonomic family that the reads you specified earlier map to. Each family directory, in turn, contains a number of homologous regions that are represented by aligned, multi-fasta consensus sequences and visualizations of these consensus sequences using `jalview`.
