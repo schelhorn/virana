@@ -3,7 +3,7 @@ Virana
 
 The Virus Analysis Toolkit
 
-Note: We are currently expanding this Readme in order to include analysis recommendations for various scenarios. A version of this tool for the workflow engine `Galaxy` that automatically satisfies all dependencies during installation is also available at http://testtoolshed.g2.bx.psu.edu/view/mzeidler/virana_main
+Note: We are currently expanding this Readme in order to include analysis recommendations for various scenarios as well as a detailled installation guide. Please visit this page again in a week for an illustrated guide and additional command line help.  A version of this tool for the workflow engine `Galaxy` that automatically satisfies all dependencies during installation is also available at http://testtoolshed.g2.bx.psu.edu/view/mzeidler/virana_main
 
 ### Summary
 
