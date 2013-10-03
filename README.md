@@ -14,9 +14,13 @@ Virana, _the virus analysis toolkit_, is a Python-based software toolkit for ana
 - identify transcripts expressed at low abundances across multiple samples
 - identify transcripts homologous to human factors such as certain viral oncogenes
 
-Depending on the branch you choose, virana is available either in a locally executable version or as a tool for the workflow engine  `Galaxy`.
+A recent analysis of human tumor transcriptomes displays the ability of Virana to detect diverged viral nucleotide sequences and human-viral homologs with high sensitivity. The manuscript is available at doi:10.1371/journal.pcbi.1003228 and http://www.ploscompbiol.org/article/info:doi/10.1371/journal.pcbi.1003228 
 
-In order to implement these features, Virana consists of three components
+### Usage
+
+Depending on the branch you choose, virana is available either in a locally executable version or as a tool for the workflow engine  `Galaxy`. In the following, we assume that you want to use the locally executable, command-line version.
+
+Virana consists of three components:
 
 1. `vref` ( _virana reference_ ), a tool that obtains viral, human, fungi, and bacterial references sequences as well as their taxonomic annotation from reference archives
 2. `vmap` ( _virana mapper_ ), a tool that employs the short read mappers `STAR` and `bwa mem` to map transcriptomic reads and genomic reads against annotated references, respectively
