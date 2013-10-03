@@ -16,9 +16,9 @@ Virana, _the virus analysis toolkit_, is a Python-based software toolkit for ana
 
 A recent analysis of human tumor transcriptomes displays the ability of Virana to detect diverged viral nucleotide sequences and human-viral homologs with high sensitivity. The manuscript is available at doi:10.1371/journal.pcbi.1003228 and http://www.ploscompbiol.org/article/info:doi/10.1371/journal.pcbi.1003228 
 
-### Usage
+### Components
 
-Depending on the branch you choose, virana is available either in a locally executable version or as a tool for the workflow engine  `Galaxy`. In the following, we assume that you want to use the locally executable, command-line version.
+Depending on the branch you choose, virana is available either in a locally executable version or as a tool for the workflow engine  `Galaxy`. In the following, we assume that you want to use the locally executable, command-line version. Virana is implemented in Python and requires the executables `samtools`, `STAR` in the path or provided as additional command line arguments. The jar file of the visualization tool `jalview` may be supplied to automatically generate alignment diagrams.
 
 Virana consists of three components:
 
