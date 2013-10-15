@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 #from __future__ import print_function
 
-import cProfile
+#import cProfile
+#import line_profiler
+import numpy
 
 import sys
 import re
@@ -18,9 +20,12 @@ import zlib
 import math
 import string
 
-from collections import defaultdict, Counter
+from collections import defaultdict
 
 from subprocess import PIPE
+import time
+
+
 
 NON_ID = ''.join(c for c in map(chr, range(256)) if not c.isalnum())
 NON_ID = NON_ID.replace('_', '').replace('-', '')
@@ -60,182 +65,240 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
-def profile_this(fn):
-    def profiled_fn(*args, **kwargs):
-        fpath = fn.__name__ + ".profile"
-        prof = cProfile.Profile()
-        ret = prof.runcall(fn, *args, **kwargs)
-        prof.dump_stats(fpath)
-        return ret
-    return profiled_fn
+# def profile_this(fn):
+#     def profiled_fn(*args, **kwargs):
+#         fpath = fn.__name__ + ".profile"
+#         prof = cProfile.Profile()
+#         ret = prof.runcall(fn, *args, **kwargs)
+#         prof.dump_stats(fpath)
+#         return ret
+#     return profiled_fn
 
+from operator import itemgetter
+from heapq import nlargest
+from itertools import repeat, ifilter
+
+class Counter(dict):
+    '''Dict subclass for counting hashable objects.  Sometimes called a bag
+    or multiset.  Elements are stored as dictionary keys and their counts
+    are stored as dictionary values.
+
+    >>> Counter('zyzygy')
+    Counter({'y': 3, 'z': 2, 'g': 1})
+
+    '''
+
+    def __init__(self, iterable=None, **kwds):
+        '''Create a new, empty Counter object.  And if given, count elements
+        from an input iterable.  Or, initialize the count from another mapping
+        of elements to their counts.
+
+        >>> c = Counter()                           # a new, empty counter
+        >>> c = Counter('gallahad')                 # a new counter from an iterable
+        >>> c = Counter({'a': 4, 'b': 2})           # a new counter from a mapping
+        >>> c = Counter(a=4, b=2)                   # a new counter from keyword args
+
+        '''
+        self.update(iterable, **kwds)
+
+    def __missing__(self, key):
+        return 0
+
+    def most_common(self, n=None):
+        '''List the n most common elements and their counts from the most
+        common to the least.  If n is None, then list all element counts.
+
+        >>> Counter('abracadabra').most_common(3)
+        [('a', 5), ('r', 2), ('b', 2)]
+
+        '''
+        if n is None:
+            return sorted(self.iteritems(), key=itemgetter(1), reverse=True)
+        return nlargest(n, self.iteritems(), key=itemgetter(1))
+
+    def elements(self):
+        '''Iterator over elements repeating each as many times as its count.
+
+        >>> c = Counter('ABCABC')
+        >>> sorted(c.elements())
+        ['A', 'A', 'B', 'B', 'C', 'C']
+
+        If an element's count has been set to zero or is a negative number,
+        elements() will ignore it.
+
+        '''
+        for elem, count in self.iteritems():
+            for _ in repeat(None, count):
+                yield elem
+
+    # Override dict methods where the meaning changes for Counter objects.
+
+    @classmethod
+    def fromkeys(cls, iterable, v=None):
+        raise NotImplementedError(
+            'Counter.fromkeys() is undefined.  Use Counter(iterable) instead.')
+
+    def update(self, iterable=None, **kwds):
+        '''Like dict.update() but add counts instead of replacing them.
+
+        Source can be an iterable, a dictionary, or another Counter instance.
+
+        >>> c = Counter('which')
+        >>> c.update('witch')           # add elements from another iterable
+        >>> d = Counter('watch')
+        >>> c.update(d)                 # add elements from another counter
+        >>> c['h']                      # four 'h' in which, witch, and watch
+        4
+
+        '''
+        if iterable is not None:
+            if hasattr(iterable, 'iteritems'):
+                if self:
+                    self_get = self.get
+                    for elem, count in iterable.iteritems():
+                        self[elem] = self_get(elem, 0) + count
+                else:
+                    dict.update(self, iterable) # fast path when counter is empty
+            else:
+                self_get = self.get
+                for elem in iterable:
+                    self[elem] = self_get(elem, 0) + 1
+        if kwds:
+            self.update(kwds)
+
+    def copy(self):
+        'Like dict.copy() but returns a Counter instance instead of a dict.'
+        return Counter(self)
+
+    def __delitem__(self, elem):
+        'Like dict.__delitem__() but does not raise KeyError for missing values.'
+        if elem in self:
+            dict.__delitem__(self, elem)
+
+    def __repr__(self):
+        if not self:
+            return '%s()' % self.__class__.__name__
+        items = ', '.join(map('%r: %r'.__mod__, self.most_common()))
+        return '%s({%s})' % (self.__class__.__name__, items)
+
+    # Multiset-style mathematical operations discussed in:
+    #       Knuth TAOCP Volume II section 4.6.3 exercise 19
+    #       and at http://en.wikipedia.org/wiki/Multiset
+    #
+    # Outputs guaranteed to only include positive counts.
+    #
+    # To strip negative and zero counts, add-in an empty counter:
+    #       c += Counter()
+
+    def __add__(self, other):
+        '''Add counts from two counters.
+
+        >>> Counter('abbb') + Counter('bcc')
+        Counter({'b': 4, 'c': 2, 'a': 1})
+
+
+        '''
+        if not isinstance(other, Counter):
+            return NotImplemented
+        result = Counter()
+        for elem in set(self) | set(other):
+            newcount = self[elem] + other[elem]
+            if newcount > 0:
+                result[elem] = newcount
+        return result
+
+    def __sub__(self, other):
+        ''' Subtract count, but keep only results with positive counts.
+
+        >>> Counter('abbbc') - Counter('bccd')
+        Counter({'b': 2, 'a': 1})
+
+        '''
+        if not isinstance(other, Counter):
+            return NotImplemented
+        result = Counter()
+        for elem in set(self) | set(other):
+            newcount = self[elem] - other[elem]
+            if newcount > 0:
+                result[elem] = newcount
+        return result
+
+    def __or__(self, other):
+        '''Union is the maximum of value in either of the input counters.
+
+        >>> Counter('abbb') | Counter('bcc')
+        Counter({'b': 3, 'c': 2, 'a': 1})
+
+        '''
+        if not isinstance(other, Counter):
+            return NotImplemented
+        _max = max
+        result = Counter()
+        for elem in set(self) | set(other):
+            newcount = _max(self[elem], other[elem])
+            if newcount > 0:
+                result[elem] = newcount
+        return result
+
+    def __and__(self, other):
+        ''' Intersection is the minimum of corresponding counts.
+
+        >>> Counter('abbb') & Counter('bcc')
+        Counter({'b': 1})
+
+        '''
+        if not isinstance(other, Counter):
+            return NotImplemented
+        _min = min
+        result = Counter()
+        if len(self) < len(other):
+            self, other = other, self
+        for elem in ifilter(self.__contains__, other):
+            newcount = _min(self[elem], other[elem])
+            if newcount > 0:
+                result[elem] = newcount
+        return result
 
 class CLI(cli.Application):
-    """RNA-Seq and DNA-Seq short read analysis by mapping to known reference sequences"""
+    """RNA-Seq and DNA-Seq short read analysis by mapping to known reference sequences."""
     PROGNAME = "vmap"
     VERSION = "1.0.0"
-    DESCRIPTION = """Virana vmap is an interface to the NCBI and ensembl reference databases that can
-                     generate reference indexes for the short read mappers STAR (RNA-Seq) and
-                     BWA-MEM (DNA-Seq). Short reads can be mapped to arbitrary combinations of
-                     reference databases and the results can be summarized by taxonomic family
-                     as well as stored as SAM file, unsorted BAM file, or as a HIT file that
-                     models multimapping reads between specific reference databases."""
-    USAGE = """The program has four modes that can be accessed by `vmap rnaindex`, `vmap dnaindex`, `vmap rnamap`, and `vmap dnamap.`"""
+    DESCRIPTION = \
+"""DESCRIPTION: virana vmap - short read mapping for clinical metagenomics.
+
+The virana mapping utility ('vmap') is a wrapper around indexing and mapping
+fascilities of three short read alignments tools, STAR, BWA-MEM, and SMALT.
+vmap is able to generate reference indexes for each of these mappers from a
+single FASTA file and then map short reads in FASTQ format against these indexes.
+During mappings, alignments are output as SAM-files, unsorted BAM-files,
+taxonomic bins (by taxonomic families), and a special virana format that
+summarizes reads that align to specific taxonomic reference databases such as
+viruses and additionaly capture multimapping information. In addition, some mappers
+also supoort output of unmapped reads in FASTQ format for later assembly or
+special treatment of chimeric alignments and their output in SAM files.
+
+https://github.com/schelhorn/virana
+
+Schelhorn S-E, Fischer M, Tolosi L, Altmueller J, Nuernberg P, et al. (2013)
+Sensitive Detection of Viral Transcripts in Human Tumor Transcriptomes.
+PLoS Comput Biol 9(10): e1003228. doi:10.1371/journal.pcbi.1003228"""
+
+    USAGE = """USAGE: The program has four modes that can be accessed by
+       [vmap | python vmap.py] [rnaindex | dnaindex | rnamap | dnamap]"""
 
     def main(self, *args):
 
+        print 'CLI main'
+
         if args:
-            print("Unknown command %r" % (args[0]))
             print self.USAGE
+            print("ERROR: Unknown command %r" % (args[0]))
             return 1
 
         if not self.nested_command:
-            print("No command given")
             print self.USAGE
+            print("ERROR : No command given")
             return 1
-
-
-@CLI.subcommand("rnaindex")
-class RNAIndex(cli.Application):
-    """ Creates a STAR index from a FASTA genome reference """
-
-    reference_files = cli.SwitchAttr(
-        ['-r', '--reference_file'], str, list=True, mandatory=True,
-        help="Sets the reference genome(s) FASTA file." +
-        " Multiple occurrences of this parameter are allowed.")
-    index_dir = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
-                               help="Sets the index output directory." +
-                               " Directory will be generated if not existing." +
-                               " Directory will be filled with several index files.")
-    threads = cli.SwitchAttr(
-        ['-t', '--threads'], cli.Range(1, 512), mandatory=False,
-        help="Sets the number of threads to use",
-        default=1)
-    max_ram = cli.SwitchAttr(
-        ['-m'], cli.Range(1, 400000000000), mandatory=False,
-        help="Sets the maximum amount of memory (RAM) to use (in bytes)",
-        default=400000000000)
-    path = cli.SwitchAttr(['-p', '--path'], str, mandatory=False,
-                          help="Path to STAR executable",
-                          default='')
-    sparse = cli.Flag(
-        ["-s", "--sparse"], help="If given, a sparse index that requires less " +
-        " RAM in the mapping phase will be constructed")
-
-    debug = cli.Flag(["-d", "--debug"], help="Enable debug output")
-
-    def main(self):
-
-        if self.debug:
-            logging.getLogger().setLevel(logging.DEBUG)
-
-        # Obtain star executable
-        star = [self.path and self.path or 'STAR']
-
-        # Check if genome directory is existing
-        for reference_file in self.reference_files:
-            if not os.path.exists(reference_file):
-                sys.stdout.write(
-                    'Reference file %s nor existing, exiting' % reference_file)
-                sys.exit(1)
-
-        # Check if output directory is existing
-        if not os.path.exists(self.index_dir):
-            logging.debug(
-                'Making output directory for index at %s' % self.index_dir)
-            os.makedirs(self.index_dir)
-
-        # # Make named pipe to extract genomes
-        # pipe_path = os.path.abspath(os.path.join(self.genome_dir, 'pipe.fa'))
-        # if os.path.exists(pipe_path):
-        #     os.unlink(pipe_path)
-        # os.mkfifo(pipe_path)
-
-        # Make star command line
-        cline = star + ['--runMode', 'genomeGenerate',
-                        '--genomeDir', self.index_dir,
-                        '--limitGenomeGenerateRAM', str(self.max_ram),
-                        '--runThreadN', str(self.threads),
-                        '--genomeFastaFiles'] + self.reference_files
-
-        # Add parameters for sparse (memory-saving) index generation
-        if self.sparse:
-            cline += ['--genomeSAsparseD', '2',
-                      '--genomeChrBinNbits', '12',
-                      '--genomeSAindexNbases', '13']
-
-        else:
-            cline += ['--genomeSAsparseD', '1',
-                      '--genomeChrBinNbits', '18',
-                      '--genomeSAindexNbases', '15']
-
-        if self.debug:
-            print ' '.join(cline)
-
-        # Run STAR reference generation process
-        star_process = subprocess.Popen(' '.join(cline), shell=True, stdout=PIPE, stderr=PIPE)
-
-        # Block until streams are closed by the process
-        stdout, stderr = star_process.communicate()
-
-        if stderr:
-            sys.stderr.write(stderr)
-
-        if self.debug and stdout:
-            print stdout
-
-
-@CLI.subcommand("dnaindex")
-class DNAIndex(cli.Application):
-    """ Creates a BWA index from a FASTA reference file """
-
-    reference_file  = cli.SwitchAttr(['-r', '--reference_file'], str, mandatory=True,
-                                 help="Sets the input reference FASTA file.")
-    index_dir   = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
-                                 help="Sets the index output directory." +
-                                 " Directory will be generated if not existing." +
-                                 " Directory will be filled with several index files.")
-    path        = cli.SwitchAttr(['-p', '--path'], str, mandatory=False,
-                                 help="Path to BWA executable",
-                                 default='')
-    debug       = cli.Flag(["-d", "--debug"], help="Enable debug output")
-
-    if debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-
-    def main(self):
-
-        # Obtain star executable
-        bwa = [self.path and self.path or 'bwa']
-
-        # Check if genome directory is existing
-        if not os.path.exists(self.reference_file):
-            sys.stdout.write('Genome file %s nor existing, exiting' % self.reference_file)
-            sys.exit(1)
-
-        # Check if output directory is existing
-        if not os.path.exists(self.index_dir):
-            logging.debug('Making output directory %s' % self.index_dir)
-            os.makedirs(self.index_dir)
-
-        # Make star command line
-        cline = bwa + ['index', '-a', 'bwtsw', '-p', os.path.join(self.index_dir, 'index'), self.reference_file]
-
-        if self.debug:
-            print ' '.join(cline)
-
-        # Run BWA index generation process
-        bwa_process = subprocess.Popen(' '.join(cline), shell=True, stdout=PIPE, stderr=PIPE)
-        stdout, stderr = bwa_process.communicate()
-
-        if stderr:
-            sys.stderr.write(stderr)
-
-        if self.debug and stdout:
-            print stdout
-
-
-
 
 
 class SAMHits:
@@ -389,7 +452,7 @@ class SAMParser:
         alignment   = HTSeq._HTSeq.SAM_Alignment.from_SAM_line(line)
         read_name   = alignment.read.name
         seq         = alignment.read.seq
-        qual        = alignment.read.qual
+        qual        = numpy.array(alignment.read.qual)
         flag        = alignment.flag
         cigar       = None
 
@@ -604,8 +667,8 @@ class SAMQuality:
                     number_hits, is_reverse, is_primary, is_mapped, is_mate_mapped,\
                     is_paired, number_matches, read_end_pos, max_match = parsed_line
 
-        phred_quality       = [q - 33 for q in qual]
-        avg_phred_quality   = sum(phred_quality) / float(len(phred_quality))
+        phred_quality       = qual - 33
+        avg_phred_quality   = numpy.mean(phred_quality)
         length              = len(seq)
         mate_reference_id   = mate_ref_name
         reference_id        = ref_name
@@ -920,8 +983,333 @@ class SAMTaxonomy:
         with open(self.file_path, 'w') as output_file:
             output_file.writelines(self.get_summary())
 
+
+class Index(cli.Application):
+
+    def setup_logging(self):
+        if self.debug:
+            logging.getLogger().setLevel(logging.DEBUG)
+
+        return self.debug
+
+    def validate_paths(self):
+
+        # Check if genome directory is existing
+        if not os.path.exists(self.reference_file):
+            sys.stderr.write(
+                'Reference file %s nor existing, exiting' % self.reference_file)
+            sys.exit(1)
+
+        # Check if output directory is existing
+        if not os.path.exists(self.index_dir):
+            logging.debug(
+                'Making output directory for index at %s' % self.index_dir)
+            os.makedirs(self.index_dir)
+
+    def get_command_line(self):
+
+        # # Make named pipe to extract genomes
+        # pipe_path = os.path.abspath(os.path.join(self.genome_dir, 'pipe.fa'))
+        # if os.path.exists(pipe_path):
+        #     os.unlink(pipe_path)
+        # os.mkfifo(pipe_path)
+
+        pass
+
+    def run_index_process(self):
+
+        # Run index generation process
+        command_line = self.get_command_line()
+        process = subprocess.Popen(' '.join(command_line), shell=True, stdout=PIPE, stderr=PIPE)
+
+        # Block until streams are closed by the process
+        stdout, stderr = process.communicate()
+
+        if stderr:
+            sys.stderr.write(stderr)
+
+        if self.debug and stdout:
+            print stdout
+
+    def main(self, *args):
+
+        self.setup_logging()
+        self.validate_paths()
+        self.run_index_process()
+
+@CLI.subcommand("rnaindex")
+class RNAIndex(Index):
+    """ Creates a STAR index from a FASTA genome reference """
+
+    reference_file = cli.SwitchAttr(
+        ['-r', '--reference_file'], str, mandatory=True,
+        help="Sets the reference genome FASTA file.")
+
+    index_dir = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
+                               help="Sets the index output directory." +
+                               " Directory will be generated if not existing." +
+                               " Directory will be filled with several index files.")
+    threads = cli.SwitchAttr(
+        ['-t', '--threads'], cli.Range(1, 512), mandatory=False,
+        help="Sets the number of threads to use",
+        default=1)
+
+    max_ram = cli.SwitchAttr(
+        ['-m'], cli.Range(1, 400000000000), mandatory=False,
+        help="Sets the maximum amount of memory (RAM) to use (in bytes)",
+        default=400000000000)
+
+    path = cli.SwitchAttr(['-p', '--path'], str, mandatory=False,
+                          help="Path to STAR executable",
+                          default='STAR')
+    sparse = cli.Flag(
+        ["-s", "--sparse"], help="If given, a sparse index that requires less " +
+        " RAM in the mapping phase will be constructed")
+
+    debug = cli.Flag(["-d", "--debug"], help="Enable debug output")
+
+    def get_command_line(self):
+
+        # Make star command line
+        cline = [self.path] + ['--runMode', 'genomeGenerate',
+                        '--genomeDir', self.index_dir,
+                        '--limitGenomeGenerateRAM', str(self.max_ram),
+                        '--runThreadN', str(self.threads),
+                        '--genomeFastaFiles'] + self.reference_files
+
+        # Add parameters for sparse (memory-saving) index generation
+        if self.sparse:
+            cline += ['--genomeSAsparseD', '2',
+                      '--genomeChrBinNbits', '12',
+                      '--genomeSAindexNbases', '13']
+
+        else:
+            cline += ['--genomeSAsparseD', '1',
+                      '--genomeChrBinNbits', '18',
+                      '--genomeSAindexNbases', '15']
+
+        if self.debug:
+            print ' '.join(cline)
+
+        return cline
+
+@CLI.subcommand("dnaindex")
+class DNAIndex(Index):
+    """ Creates a BWA index from a FASTA reference file """
+
+    reference_file  = cli.SwitchAttr(['-r', '--reference_file'], str, mandatory=True,
+                                 help="Sets the input reference FASTA file.")
+    index_dir   = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
+                                 help="Sets the index output directory." +
+                                 " Directory will be generated if not existing." +
+                                 " Directory will be filled with several index files.")
+    path        = cli.SwitchAttr(['-p', '--path'], str, mandatory=False,
+                                 help="Path to BWA executable",
+                                 default='bwa')
+    debug       = cli.Flag(["-d", "--debug"], help="Enable debug output")
+
+    def get_command_line(self):
+
+        # Make star command line
+        cline = [self.path] + ['index', '-a', 'bwtsw', '-p', os.path.join(self.index_dir, 'index'), self.reference_file]
+
+        return cline
+
+@CLI.subcommand("varindex")
+class VARIndex(Index):
+    """ Creates a SMALT index from a FASTA reference file """
+
+    reference_file  = cli.SwitchAttr(['-r', '--reference_file'], str, mandatory=True,
+                                 help="Sets the input reference FASTA file.")
+    index_dir   = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
+                                 help="Sets the index output directory." +
+                                 " Directory will be generated if not existing." +
+                                 " Directory will be filled with several index files.")
+    path        = cli.SwitchAttr(['-p', '--path'], str, mandatory=False,
+                                 help="Path to SMALT executable",
+                                 default='smalt_x86_64')
+    debug       = cli.Flag(["-d", "--debug"], help="Enable debug output")
+
+    def get_command_line(self):
+
+        # Make star command line
+        cline = [self.path] + ['index', '-k', '20', '-s', '2', os.path.join(self.index_dir, 'index'), self.reference_file]
+
+        return cline
+
+class Mapper(cli.Application):
+
+    def setup_logging(self):
+        if self.debug:
+            logging.getLogger().setLevel(logging.DEBUG)
+
+        return self.debug
+
+    def validate_paths(self, mapper_executable):
+
+        mapper_path      = self.mapper_path and self.mapper_path or mapper_executable
+        samtools_path    = self.samtools_path and self.samtools_path or 'samtools'
+
+        # Check if genome directory is existing
+        if not os.path.exists(self.index_dir):
+            message = 'Index directory %s not existing, exiting' % self.index_dir
+            sys.stderr.write(message)
+            sys.exit(1)
+
+        # Check for number of read input files
+        if len(self.reads) not in (1, 2):
+            message = 'Invalid number of FASTQ files; supply either one (single end) or two (paired end)\n'
+            sys.stderr.write(message)
+            sys.exit(1)
+
+        # Make temporary directories
+        if self.temp_path:
+            temp_path = tempfile.mkdtemp(dir=self.temp_path)
+        else:
+            temp_path = tempfile.mkdtemp()
+
+        # Try if we can make the relevant output files
+        outputs = ['unmapped1', 'unmapped2', 'taxonomy', 'qual', 'hits', 'sam', 'bam', 'chimeric_mappings']
+        for output in outputs:
+            try:
+                attribute = getattr(self, output)
+            except AttributeError:
+                continue
+
+            if attribute is None or attribute == '':
+                continue
+            try:
+                with file(attribute, 'a'):
+                    os.utime(attribute, None)
+            except IOError:
+                sys.stderr.write('Could not write output file %s\n' % attribute)
+                sys.exit(1)
+
+        return mapper_path, samtools_path, temp_path
+
+    def get_command_line(self, mapper_path, temp_path):
+        pass
+
+    def run_mapper_process(self, mapper_path, temp_path):
+
+        command_line = ' '.join(self.get_command_line(mapper_path, temp_path))
+        process = subprocess.Popen(command_line, shell=True, stdout=PIPE)
+
+        if self.debug:
+            print 'Running: %s' % command_line
+
+        return process
+
+    def setup_outputs(self, samtools_path):
+
+        taxonomy = None
+        if self.taxonomy:
+            taxonomy = SAMTaxonomy(self.taxonomy)
+
+        quality = None
+        if self.qual:
+            quality = SAMQuality(self.qual)
+
+        hits = None
+        if self.hits:
+            hits = SAMHits(self.hits, self.sample_id, self.hit_filter,
+                        self.min_mapping_score,
+                        self.min_alignment_score,
+                        self.max_mismatches,
+                        self.max_relative_mismatches,
+                        self.min_continiously_matching,
+                        self.filter_complexity)
+
+        sam_file = None
+        if self.sam:
+            sam_file = open(self.sam, 'w', buffering=100 * 1024 * 1024)
+
+        bam_process = None
+        if self.bam:
+            with open(self.bam, 'wb', buffering=100 * 1024 * 1024) as bam_file:
+
+                command_line = samtools_path + ['view', '-b', '-1', '-S', '-@', '4', '/dev/stdin']
+                command_line = ' '.join(command_line)
+
+                if self.debug:
+                    print 'Running: %s' % command_line
+
+                bam_process = subprocess.Popen(command_line, shell=True, stdout=bam_file, stdin=PIPE)
+
+        parser = None
+        if taxonomy or quality or hits:
+            parser = SAMParser()
+
+        return parser, taxonomy, quality, hits, sam_file, bam_process
+
+    def post_process(self, bam_process, sam_file, hits, taxonomy, quality, temp_path):
+
+        if bam_process:
+            bam_process.stdin.close()
+
+        if sam_file:
+            sam_file.close()
+
+        if hits:
+            hits.write()
+
+        if taxonomy:
+            print ''.join(taxonomy.get_summary(10))
+            taxonomy.write()
+
+        if quality:
+            quality.write()
+
+        shutil.rmtree(temp_path)
+
+    def main(self, *args):
+
+        debug = self.setup_logging()
+        mapper_path, samtools_path, temp_path = self.validate_paths(self.mapper_path)
+        mapper_process = self.run_mapper_process(mapper_path, temp_path)
+
+        parser, taxonomy, quality, hits, sam_file, bam_process = self.setup_outputs(samtools_path)
+
+        last_time = time.time()
+        i = 0
+        for line in iter(mapper_process.stdout.readline, ''):
+
+            i += 1
+
+            if debug and i > 0 and (i % 100000) == 0:
+                this_time = time.time()
+                print 'Mapping at %i reads per hour' % ((100000 * 3600) / (this_time - last_time))
+                last_time = this_time
+
+            if sam_file:
+                sam_file.write(line)
+
+            if bam_process:
+                bam_process.stdin.write(line)
+
+            if line[0] == '@':
+                continue
+
+            if parser:
+                parsed_line = parser.parse(line)
+
+            if taxonomy:
+                taxonomy.count(parsed_line)
+
+                # if i > 0 and (i % 100000) == 0:
+                #     print ''.join(taxonomy.get_summary(10))
+
+            if quality:
+                quality.count(parsed_line)
+
+            if hits:
+                hits.count(parsed_line)
+
+        self.post_process(bam_process, sam_file, hits, taxonomy, quality, temp_path)
+
+
 @CLI.subcommand("rnamap")
-class RNAmap(cli.Application):
+class RNAmap(Mapper):
     """ Map input reads against a STAR index """
 
     index_dir = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
@@ -937,7 +1325,7 @@ class RNAmap(cli.Application):
         help="Output path for the taxonomy file; setting this option will also enable regular taxonomy output to stdout during mapping",
         default='')
 
-    star_path = cli.SwitchAttr(['--star_path'], str, mandatory=False,
+    mapper_path = cli.SwitchAttr(['--star_path'], str, mandatory=False,
                           help="Path to STAR executable",
                           default='')
 
@@ -1025,24 +1413,8 @@ class RNAmap(cli.Application):
     sensitive = cli.Flag(
         ["--sensitive"], help="If given, mapping will process slower and more sensitive")
 
-    def main(self):
 
-        if self.debug:
-            logging.getLogger().setLevel(logging.DEBUG)
-
-        # Obtain star executable
-        star        = [self.star_path and self.star_path or 'STAR']
-        samtools    = [self.samtools_path and self.samtools_path or 'samtools']
-
-        # Check if genome directory is existing
-        if not os.path.exists(self.index_dir):
-            sys.stdout.write('Index directory %s not existing, exiting' % self.genome_dir)
-            sys.exit(1)
-
-        if self.temp_path:
-            temp_path = tempfile.mkdtemp(dir=self.temp_path)
-        else:
-            temp_path = tempfile.mkdtemp()
+    def get_command_line(self, mapper_path, temp_path):
 
         first_ends      = []
         second_ends     = []
@@ -1056,18 +1428,13 @@ class RNAmap(cli.Application):
         elif len(self.reads) == 1:
             single_ends.append(self.reads[0])
 
-        else:
-            sys.stdout.write('Invalid number of fastq files; provide either one (single end) or two (paired end)')
-            sys.exit(1)
-
         if single_ends and not first_ends and not second_ends:
             reads = [','.join(single_ends)]
 
         elif first_ends and second_ends:
             reads = [','.join(first_ends), ','.join(second_ends)]
 
-
-        star_cline = star + ['--runMode', 'alignReads',
+        command_line = [mapper_path] + ['--runMode', 'alignReads',
                         '--genomeDir', self.index_dir,
                         '--runThreadN', str(self.threads),
                         '--readMatesLengthsIn', 'NotEqual',
@@ -1083,16 +1450,16 @@ class RNAmap(cli.Application):
                         '--outSAMorder', 'PairedKeepInputOrder']
 
         if self.unmapped1 or self.unmapped2:
-            star_cline += ['--outReadsUnmapped', 'Fastx']
+            command_line += ['--outReadsUnmapped', 'Fastx']
         else:
-            star_cline += ['--outReadsUnmapped', 'None']
+            command_line += ['--outReadsUnmapped', 'None']
 
 
         if self.zipped:
-            star_cline += ['--readFilesCommand', 'zcat']
+            command_line += ['--readFilesCommand', 'zcat']
 
         if self.sensitive:
-            star_cline += ['--outFilterMultimapScoreRange', '10',
+            command_line += ['--outFilterMultimapScoreRange', '10',
                           '--outFilterMismatchNmax', '60',
                           '--outFilterMismatchNoverLmax', '0.3',
                           '--outFilterScoreMin', '0',
@@ -1102,102 +1469,11 @@ class RNAmap(cli.Application):
                           '--seedSearchStartLmax', '12',
                           '--winAnchorMultimapNmax', '50']
 
-        star_cline += ['--readFilesIn'] + reads
+        command_line += ['--readFilesIn'] + reads
 
-        if self.debug:
-            print ' '.join(star_cline)
+        return command_line
 
-        # Try if we can make the relevant files
-        touch_files = [self.unmapped1, self.unmapped2, self.taxonomy, self.qual, self.hits, self.sam, self.bam]
-        for file_path in touch_files:
-            if file_path is None or file_path == '':
-                continue
-            try:
-                with file(file_path, 'a'):
-                    os.utime(file_path, None)
-            except IOError:
-                sys.stderr.write('Could not write output file %s\n' % file_path)
-                sys.exit(1)
-
-        star_process = subprocess.Popen(' '.join(
-                                        star_cline), shell=True, stdout=PIPE)
-
-        parser      = SAMParser()
-
-        if self.taxonomy:
-            taxonomy    = SAMTaxonomy(self.taxonomy)
-
-        if self.qual:
-            quality     = SAMQuality(self.qual)
-
-        if self.hits:
-            hits        = SAMHits(self.hits, self.sample_id, self.hit_filter,
-                        self.min_mapping_score,
-                        self.min_alignment_score,
-                        self.max_mismatches,
-                        self.max_relative_mismatches,
-                        self.min_continiously_matching,
-                        self.filter_complexity)
-
-        if self.sam:
-            sam_file = open(self.sam, 'w')
-
-        if self.bam:
-            with open(self.bam, 'wb', buffering=100 * 1024 * 1024) as bam_file:
-                samtools_cline = samtools + [
-                    'view', '-b', '-1', '-S', '-@', '4', '/dev/stdin']
-                if self.debug:
-                    print ' '.join(samtools_cline)
-                samtools_process = subprocess.Popen(' '.join(samtools_cline), shell=True, stdout=bam_file, stdin=PIPE)
-
-
-        do_sam = self.sam
-        do_bam = self.bam
-        do_taxonomy = self.taxonomy
-        do_qual = self.qual
-        do_hits = self.hits
-        do_parse = do_taxonomy or do_qual or do_hits
-
-        for i, line in enumerate(iter(star_process.stdout.readline, '')):
-
-            if do_sam:
-                sam_file.write(line)
-
-            if do_bam:
-                samtools_process.stdin.write(line)
-
-            if line[0] == '@':
-                continue
-
-            if do_parse:
-                parsed_line = parser.parse(line)
-
-            if  do_taxonomy:
-                taxonomy.count(parsed_line)
-                if i > 0 and (i % 50000) == 0:
-                    print ''.join(taxonomy.get_summary(10))
-
-            if do_qual:
-                quality.count(parsed_line)
-
-            if do_hits:
-                hits.count(parsed_line)
-
-        if do_bam:
-            samtools_process.stdin.close()
-
-        if do_sam:
-            sam_file.close()
-
-        if do_hits:
-            hits.write()
-
-        if do_taxonomy:
-            print ''.join(taxonomy.get_summary(10))
-            taxonomy.write()
-
-        if do_qual:
-            quality.write()
+    def post_process(self, bam_process, sam_file, hits, taxonomy, quality, temp_path):
 
         try:
             if self.unmapped1:
@@ -1220,11 +1496,13 @@ class RNAmap(cli.Application):
         except IOError:
             pass
 
-        shutil.rmtree(temp_path)
+        super(RNAmap, self).post_process(bam_process, sam_file, hits, taxonomy, quality, temp_path)
+
+
 
 @CLI.subcommand("dnamap")
-class DNAmap(cli.Application):
-    """ Map input reads against a BWA index """
+class DNAmap(Mapper):
+    """ Map input reads with BWA-MEM against a BWA index """
 
     index_dir = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
                                help="Sets the index output directory")
@@ -1291,6 +1569,10 @@ class DNAmap(cli.Application):
                           help="Path to bzip2-compressed tab-delimited output virana hit file",
                           default='')
 
+    interleaved = cli.Flag(['--interleaved'],
+                          help="Inputs FASTQ is an interleaved paired end file. ",
+                          default=False)
+
     hit_filter = cli.SwitchAttr(
         ['-f', '--virana_hit_filter'], str, list=True, mandatory=False,
         help="Only generate hit groups that include at last one read mapping to a reference of this reference group.",
@@ -1303,122 +1585,128 @@ class DNAmap(cli.Application):
     sensitive = cli.Flag(
         ["--sensitive"], help="If given, mapping will process slower and more sensitive")
 
-
-    bwa_path = cli.SwitchAttr(['--bwa_path'], str, mandatory=False,
+    mapper_path = cli.SwitchAttr(['--bwa_path'], str, mandatory=False,
                           help="Path to BWA executable",
                           default='')
-
-    debug = cli.Flag(["-d", "--debug"], help="Enable debug information")
-
-    if debug:
-        logging.getLogger().setLevel(logging.DEBUG)
 
     reads = cli.SwitchAttr(
         ['-r', '--reads'], str, list=True, mandatory=True,
         help="Sets the input reads. Add this parameter twice for paired end reads.")
 
-    def main(self):
+    def get_command_line(self, mapper_path, temp_path):
 
-        if self.debug:
-            logging.getLogger().setLevel(logging.DEBUG)
+        command_line = [mapper_path] + ['mem', '-t', str(self.threads), '-M', os.path.join(self.index_dir, 'index')]
+        if self.interleaved:
+            command_line += ['-p']
+        command_line += self.reads
 
-        # Obtain star executable
-        bwa         = [self.bwa_path and self.bwa_path or 'bwa']
-        samtools    = [self.samtools_path and self.samtools_path or 'samtools']
+        return command_line
 
-        # Check if genome directory is existing
-        if not os.path.exists(self.index_dir):
-            sys.stdout.write('Index directory %s not existing, exiting'\
-                % self.genome_dir)
-            sys.exit(1)
 
-        if len(self.reads) not in (1, 2):
-            message = 'Invalid number of FASTQ files; supply either one (single end) or two (paired end)\n'
-            sys.stderr.write(message)
-            sys.exit(1)
+@CLI.subcommand("varmap")
+class VARmap(Mapper):
+    """ Map input reads with SMALT against a SMALT index """
 
-        bwa_cline = bwa + ['mem', '-t', str(self.threads), '-M', os.path.join(self.index_dir, 'index')]
+    index_dir = cli.SwitchAttr(['-i', '--index_dir'], str, mandatory=True,
+                               help="Sets the index output directory")
 
-        bwa_cline += self.reads
+    threads = cli.SwitchAttr(
+        ['-t', '--threads'], cli.Range(1, 512), mandatory=False,
+        help="Sets the number of threads to use",
+        default=1)
 
-        if self.debug:
-            print ' '.join(bwa_cline)
+    taxonomy = cli.SwitchAttr(
+        ['-x', '--taxonomy'], str, mandatory=False,
+        help="Output path for the taxonomy file; setting this option will also enable regular taxonomy output to stdout during mapping",
+        default='')
 
-        bwa_process = subprocess.Popen(' '.join(bwa_cline), shell=True, stdout=PIPE)
+    samtools_path = cli.SwitchAttr(['--samtools_path'], str, mandatory=False,
+                          help="Path to samtools executable",
+                          default='')
 
-        parser      = SAMParser()
+    temp_path = cli.SwitchAttr(['--temporary_path'], str, mandatory=False,
+                          help="Path to temporary directory in which to generate temp files. All temp files with be automatically deleted after execution is complete.",
+                          default='')
 
-        if self.taxonomy:
-            taxonomy    = SAMTaxonomy(self.taxonomy)
+    min_mapping_score = cli.SwitchAttr(['--min_mapping_score'], cli.Range(1, 255), mandatory=False,
+                          help="Mimimum mapping score for saved hits (only applied to -v/--virana_hits)",
+                          default=None)
 
-        if self.qual:
-            quality     = SAMQuality(self.qual)
+    min_alignment_score = cli.SwitchAttr(['--min_alignment_score'], cli.Range(1, 255), mandatory=False,
+                          help="Mimimum alignment score for saved hits (only applied to -v/--virana_hits)",
+                          default=None)
 
-        if self.hits:
-            hits        = SAMHits(self.hits, self.sample_id, self.hit_filter,
-                        self.min_mapping_score,
-                        self.min_alignment_score,
-                        self.max_mismatches,
-                        self.max_relative_mismatches,
-                        self.min_continiously_matching,
-                        self.filter_complexity)
+    max_mismatches = cli.SwitchAttr(['--max_mismatches'],  cli.Range(0, 10000000), mandatory=False,
+                          help="Maximum number of mismatches for saved hits (only applied to -v/--virana_hits)",
+                          default=None)
 
-        if self.sam:
-            sam_file = open(self.sam, 'w', buffering=100 * 1024 * 1024)
+    max_relative_mismatches = cli.SwitchAttr(['--max_relative_mismatches'], float, mandatory=False,
+                          help="Maximum number of mismatches relative to read length for saved hits (only applied to -v/--virana_hits)",
+                          default=None)
 
-        if self.bam:
-            with open(self.bam, 'wb', buffering=100 * 1024 * 1024) as bam_file:
-                samtools_cline = samtools + [
-                    'view', '-b', '-1', '-S', '-@', '4', '/dev/stdin']
-                if self.debug:
-                    print ' '.join(samtools_cline)
-                samtools_process = subprocess.Popen(' '.join(samtools_cline), shell=True, stdout=bam_file, stdin=PIPE)
+    min_continiously_matching = cli.SwitchAttr(['--min_continiously_matching'], cli.Range(0, 10000000), mandatory=False,
+                          help="Minimum number of continious matches for saved hits (only applied to -v/--virana_hits)",
+                          default=None)
 
-        do_sam = self.sam
-        do_bam = self.bam
-        do_taxonomy = self.taxonomy
-        do_qual = self.qual
-        do_hits = self.hits
-        do_parse = do_taxonomy or do_qual or do_hits
+    filter_complexity = cli.Flag(['--filter_complexity'],
+                          help="Discard low-complexity reads (only applied to -v/--virana_hits). Adds some extra processing load to the mapping and may discard important information. Applies to all output files, including quality files (!)",
+                          default=False)
 
-        for i, line in enumerate(iter(bwa_process.stdout.readline, '')):
+    sample_id = cli.SwitchAttr(['--sample_id'], str, mandatory=False,
+                          help="Alphanumeric string ([0-9a-zA-Z_-]*) used to designate sample information within the hit file",
+                          default='no_sample_id')
 
-            if do_sam:
-                sam_file.write(line)
+    bam_input = cli.Flag(['--bam_input'],
+                          help="Input is a bam file",
+                          default=False)
 
-            if do_bam:
-                samtools_process.stdin.write(line)
 
-            if do_parse:
-                parsed_line = parser.parse(line)
+    bam = cli.SwitchAttr(['-b', '--bam'], str, mandatory=False,
+                         help="Path to unsorted, unindexed output BAM file",
+                         default='')
 
-            if do_taxonomy:
-                taxonomy.count(parsed_line)
+    sam = cli.SwitchAttr(['-s', '--sam'], str, mandatory=False,
+                         help="Path to output SAM file",
+                         default='')
 
-                if i > 0 and (i % 10000) == 0:
-                    print ''.join(taxonomy.get_summary(10))
+    qual = cli.SwitchAttr(['-q', '--qual'], str, mandatory=False,
+                         help="Path to output quality file",
+                         default='')
 
-            if do_qual:
-                quality.count(parsed_line)
+    hits = cli.SwitchAttr(['-v', '--virana_hits'], str, mandatory=False,
+                          help="Path to bzip2-compressed tab-delimited output virana hit file",
+                          default='')
 
-            if do_hits:
-                hits.count(parsed_line)
+    hit_filter = cli.SwitchAttr(
+        ['-f', '--virana_hit_filter'], str, list=True, mandatory=False,
+        help="Only generate hit groups that include at last one read mapping to a reference of this reference group.",
+        default=[])
 
-        if do_bam:
-            samtools_process.stdin.close()
+    debug = cli.Flag(["-d", "--debug"], help="Enable debug information")
 
-        if do_sam:
-            sam_file.close()
+    zipped = cli.Flag(["-z", "--zipped"], help="Input reads are zipped")
 
-        if do_hits:
-            hits.write()
+    sensitive = cli.Flag(
+        ["--sensitive"], help="If given, mapping will process slower and more sensitive")
 
-        if do_taxonomy:
-            print ''.join(taxonomy.get_summary(10))
-            taxonomy.write()
+    mapper_path = cli.SwitchAttr(['--smalt_path'], str, mandatory=False,
+                          help="Path to SMALT executable",
+                          default='')
 
-        if do_qual:
-            quality.write()
+    debug = cli.Flag(["-d", "--debug"], help="Enable debug information")
+
+    reads = cli.SwitchAttr(
+        ['-r', '--reads'], str, list=True, mandatory=True,
+        help="Sets the input reads. Add this parameter twice for paired end reads.")
+
+    def get_command_line(self, mapper_path, temp_path):
+
+        command_line = [mapper_path] + ['map', '-f', 'sam', '-l', '-n', self.threads, '-O', '-p']
+        if self.sensitive:
+            command_line += ['-x']
+        command_line += self.reads
+
+        return command_line
 
 
 if __name__ == "__main__":
