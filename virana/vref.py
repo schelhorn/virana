@@ -1,5 +1,12 @@
 #!/usr/bin/env python
 
+""" Virana reference tool for downlaoding taxonomically annotated
+    reference genomes. Part of the Virana package.
+
+    (c) 2013, Sven-Eric Schelhorn, MPI for Informatics.
+"""
+
+
 import sys
 import logging
 import gzip
@@ -77,7 +84,7 @@ class DataDownloader(object):
 
         raise NotImplementedError
 
-class SilvaDownlaoder(DataDownloader):
+class SilvaDownloader(DataDownloader):
     """ Downlaods rRNA transcripts from the Silva database. """
 
     def __init__(self, silva_release='111'):
@@ -86,7 +93,7 @@ class SilvaDownlaoder(DataDownloader):
         self.silva_host_name    = 'ftp.arb-silva.de'
         self.base_path          = '/release_%s/Exports/' % self.silva_release
 
-        super(SilvaDownlaoder, self).__init__(self.silva_host_name, self.base_path)
+        super(SilvaDownloader, self).__init__(self.silva_host_name, self.base_path)
 
         self.group = 'rRNA'
 
@@ -156,12 +163,13 @@ class HumanTranscriptDownloader(DataDownloader):
                     with self.host.file(self.gtf_path + '/' + entry, 'rb') as zipped_handle:
                         remote_content = BytesIO(zipped_handle.read())
 
-                        with gzip.GzipFile(fileobj=remote_content) as gzipfile:
-                            for i, gtf_line in enumerate(gzipfile):
-                                if i % 100000 == 0:
-                                    logging.debug('Cached %i human transcript annotations' % i)
+                        gzipfile = gzip.GzipFile(fileobj=remote_content)
+                        for i, gtf_line in enumerate(gzipfile):
+                            if i % 100000 == 0:
+                                logging.debug('Cached %i human transcript annotations' % i)
 
-                                self._add_annotation(gtf_line)
+                            self._add_annotation(gtf_line)
+                        gzipfile.close()
 
     def _get_raw_transcripts(self):
         """ Obtains coding and noncoding human transcripts from ensemble and
@@ -185,17 +193,18 @@ class HumanTranscriptDownloader(DataDownloader):
                         with self.host.file(subpath + '/' + entry, 'rb') as zipped_handle:
                             remote_content = BytesIO(zipped_handle.read())
 
-                            with gzip.GzipFile(fileobj=remote_content) as gzipfile:
-                                for i, record in enumerate(SeqIO.parse(gzipfile, "fasta")):
+                            gzipfile = gzip.GzipFile(fileobj=remote_content)
+                            for i, record in enumerate(SeqIO.parse(gzipfile, "fasta")):
 
-                                    if record.id.startswith('ENST'):
+                                if record.id.startswith('ENST'):
 
-                                        if i % 100000 == 0:
-                                            logging.debug('Retrieved %i human transcripts' % i)
+                                    if i % 100000 == 0:
+                                        logging.debug('Retrieved %i human transcripts' % i)
 
-                                        record.description = ''
+                                    record.description = ''
 
-                                        yield record
+                                    yield record
+                            gzipfile.close()
 
     def _add_annotation(self, gtf_line):
         """ Parses gtf annotations and stores them in memory. """
@@ -341,16 +350,17 @@ class RefSeqDownloader(DataDownloader):
         scaffold_path = entry_path.replace('.gbk', '.scaffold.gbk.tgz')
         if self.host.path.isfile(scaffold_path):
             logging.debug('Processing refseq entry %s' % scaffold_path)
-            with self.host.file(scaffold_path, 'rb') as remote_handle:
-                remote_content = BytesIO(remote_handle.read())
-                with tarfile.open(fileobj=remote_content) as tar:
-                    for subentry in tar.getnames():
-                        if subentry.endswith('.gbk'):
-                            logging.debug('Processing subaccession %s' % subentry)
-                            subhandle = tar.extractfile(subentry)
-                            for record, project, taxonomy, family, organism, gi in self._parse_genbank_records(subhandle):
-                                yield self._get_fasta_record(record, self.group , family, organism, gi)
-
+            remote_handle = self.host.file(scaffold_path, 'rb')
+            remote_content = BytesIO(remote_handle.read())
+            tar = tarfile.open(fileobj=remote_content)
+            for subentry in tar.getnames():
+                if subentry.endswith('.gbk'):
+                    logging.debug('Processing subaccession %s' % subentry)
+                    subhandle = tar.extractfile(subentry)
+                    for record, project, taxonomy, family, organism, gi in self._parse_genbank_records(subhandle):
+                        yield self._get_fasta_record(record, self.group , family, organism, gi)
+            tar.close()
+            remote_handle.close()
 
     def get_fasta_records(self):
 
@@ -416,15 +426,17 @@ class HumanGenomeDownloader(DataDownloader):
                     with self.host.file(self.host.getcwd() + '/' + entry, 'rb') as zipped_handle:
                         remote_content = BytesIO(zipped_handle.read())
 
-                        with gzip.GzipFile(fileobj=remote_content) as gzipfile:
+                        gzipfile = gzip.GzipFile(fileobj=remote_content)
 
-                            for record in SeqIO.parse(gzipfile, "fasta"):
+                        for record in SeqIO.parse(gzipfile, "fasta"):
 
-                                identifier      = record.id
-                                organism        = 'Homo_sapiens'
-                                family          = 'Hominidae'
+                            identifier      = record.id
+                            organism        = 'Homo_sapiens'
+                            family          = 'Hominidae'
 
-                                yield self._get_fasta_record(record, self.group, family, organism, identifier)
+                            yield self._get_fasta_record(record, self.group, family, organism, identifier)
+
+                        gzipfile.close()
 
 class UniVecDownloader(DataDownloader):
 
@@ -450,26 +462,44 @@ class UniVecDownloader(DataDownloader):
                 yield self._get_fasta_record(record, self.group, family, organism, identifier)
 
 class CLI(cli.Application):
-    """"""
-    PROGNAME = "metamap"
+    """Downloads taxonomically annotated genomic and trasncriptomic reference sequences."""
+    PROGNAME = "vref"
     VERSION = "1.0.0"
-    DESCRIPTION = """"""
+    DESCRIPTION = \
+"""DESCRIPTION: Virana vref - downloads taxonomically annotated reference sequences.
+
+The Virana reference utility ('vref') downloads up-to-date human and microbial
+reference sequences for analysis of metagenomic short read data. In addition
+to allowing convenient download and pooling of reference genomes and transcriptomes,
+vref employs a simple but effective taxonomic annotation scheme that is used
+by later stages of the Virana pipeline.
+
+https://github.com/schelhorn/virana
+
+Schelhorn S-E, Fischer M, Tolosi L, Altmueller J, Nuernberg P, et al. (2013)
+Sensitive Detection of Viral Transcripts in Human Tumor Transcriptomes.
+PLoS Comput Biol 9(10): e1003228. doi:10.1371/journal.pcbi.1003228"""
+
+    USAGE = """USAGE: The program has four modes that can be accessed by
+       [vref | python vref.py] [fasta, blast] """
 
     def main(self, *args):
 
+        print 'CLI main'
+
         if args:
-            print("Unknown command %r" % (args[0]))
             print self.USAGE
+            print("ERROR: Unknown command %r" % (args[0]))
             return 1
 
         if not self.nested_command:
-            print("No command given")
             print self.USAGE
+            print("ERROR : No command given")
             return 1
 
 @CLI.subcommand("fasta")
 class References(cli.Application):
-    """ Obtains NCBI RefSeq and Ensembl reference genomes and transcripts"""
+    """ Obtains NCBI RefSeq and Ensembl reference genomes and transcriptomes."""
 
     valid_references = ['Fungi', 'Fungi_DRAFT', 'Bacteria',
               'Bacteria_DRAFT', 'Homo_sapiens',
@@ -480,10 +510,10 @@ class References(cli.Application):
                                    cli.Set(*valid_references, case_sensitive=True),
                                    list=True, default=valid_references,
                                    mandatory=False,
-                                   help="Sets the kind of references to obtain")
+                                   help="Sets the kind of references to obtain; microbial ('Fungi', 'Fungi_DRAFT', 'Bacteria', 'Bacteria_DRAFT', 'Protozoa', 'Viruses'), 'Plasmids'), human ('Homo_sapiens', 'Homo_sapiens_cDNA'), as well as taxonomically mixed ('rRNA' (from SILVA), 'UniVec') references are available.")
 
     fasta_path  = cli.SwitchAttr(['-o', '--output_file'], str, mandatory=True,
-                                 help="Sets the fasta output file")
+                                 help="Sets the fasta output file. Note that all downloaded fasta records are stored within a single fasta file.")
 
     zipped      = cli.Flag(["-z", "--zipped"], help="Write gzipped output")
     debug       = cli.Flag(["-d", "--debug"], help="Enable debug messages")
@@ -515,7 +545,7 @@ class References(cli.Application):
             elif reference == 'Homo_sapiens':
                 downloader = HumanGenomeDownloader()
             elif reference == 'rRNA':
-                downloader = SilvaDownlaoder()
+                downloader = SilvaDownloader()
             elif reference == 'Homo_sapiens_cDNA':
                 downloader = HumanTranscriptDownloader()
             else:
@@ -528,7 +558,7 @@ class References(cli.Application):
 
 @CLI.subcommand("blast")
 class Blast(cli.Application):
-    """ Obtains blast databases """
+    """ Obtains blast databases from NCBI."""
 
     valid_references = ['nt', 'nr']
 
@@ -536,10 +566,10 @@ class Blast(cli.Application):
                                    cli.Set(*valid_references, case_sensitive=True),
                                    list=True, default=valid_references,
                                    mandatory=False,
-                                   help="Sets the kind of database to obtain")
+                                   help="Sets the kind of database to obtain; argument can be supplied multiple times. Common choices for reference databases are 'nr' and 'nt'.")
 
     database_path  = cli.SwitchAttr(['-o', '--output_path'], str, mandatory=True,
-                                 help="Sets the fasta output file")
+                                 help="Sets the output directory for the blast database. ")
 
     debug       = cli.Flag(["-d", "--debug"], help="Enable debug messages")
 
