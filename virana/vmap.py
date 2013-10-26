@@ -1,9 +1,15 @@
 #!/usr/bin/env python
+
+""" Virana mapping tool for aligning short read data to human-microbial
+    reference genomes. Part of the Virana package.
+
+    (c) 2013, Sven-Eric Schelhorn, MPI for Informatics.
+"""
+
 #from __future__ import print_function
 
-#import cProfile
-#import line_profiler
 import numpy
+import pysam
 
 import sys
 import re
@@ -20,15 +26,10 @@ import zlib
 import math
 import string
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 from subprocess import PIPE
 import time
-
-
-
-NON_ID = ''.join(c for c in map(chr, range(256)) if not c.isalnum())
-NON_ID = NON_ID.replace('_', '').replace('-', '')
 
 try:
     from Bio.SeqRecord import SeqRecord
@@ -47,12 +48,12 @@ except ImportError:
     sys.exit(1)
 
 
-try:
-    import HTSeq
-except ImportError:
-    message = 'This script requires the HTSeq python package\n'
-    sys.stderr.write(message)
-    sys.exit(1)
+# try:
+#     import HTSeq
+# except ImportError:
+#     message = 'This script requires the HTSeq python package\n'
+#     sys.stderr.write(message)
+#     sys.exit(1)
 
 KHMER_AVAILABLE = True
 try:
@@ -60,204 +61,32 @@ try:
 except ImportError:
     KHMER_AVAILABLE = False
 
-#from io import BufferedRandom
+
+# import line_profiler
+
+NON_ID = ''.join(c for c in map(chr, range(256)) if not c.isalnum())
+NON_ID = NON_ID.replace('_', '').replace('-', '')
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
-# def profile_this(fn):
-#     def profiled_fn(*args, **kwargs):
-#         fpath = fn.__name__ + ".profile"
-#         prof = cProfile.Profile()
-#         ret = prof.runcall(fn, *args, **kwargs)
-#         prof.dump_stats(fpath)
-#         return ret
-#     return profiled_fn
+def which(program):
 
-from operator import itemgetter
-from heapq import nlargest
-from itertools import repeat, ifilter
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
 
-class Counter(dict):
-    '''Dict subclass for counting hashable objects.  Sometimes called a bag
-    or multiset.  Elements are stored as dictionary keys and their counts
-    are stored as dictionary values.
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
 
-    >>> Counter('zyzygy')
-    Counter({'y': 3, 'z': 2, 'g': 1})
-
-    '''
-
-    def __init__(self, iterable=None, **kwds):
-        '''Create a new, empty Counter object.  And if given, count elements
-        from an input iterable.  Or, initialize the count from another mapping
-        of elements to their counts.
-
-        >>> c = Counter()                           # a new, empty counter
-        >>> c = Counter('gallahad')                 # a new counter from an iterable
-        >>> c = Counter({'a': 4, 'b': 2})           # a new counter from a mapping
-        >>> c = Counter(a=4, b=2)                   # a new counter from keyword args
-
-        '''
-        self.update(iterable, **kwds)
-
-    def __missing__(self, key):
-        return 0
-
-    def most_common(self, n=None):
-        '''List the n most common elements and their counts from the most
-        common to the least.  If n is None, then list all element counts.
-
-        >>> Counter('abracadabra').most_common(3)
-        [('a', 5), ('r', 2), ('b', 2)]
-
-        '''
-        if n is None:
-            return sorted(self.iteritems(), key=itemgetter(1), reverse=True)
-        return nlargest(n, self.iteritems(), key=itemgetter(1))
-
-    def elements(self):
-        '''Iterator over elements repeating each as many times as its count.
-
-        >>> c = Counter('ABCABC')
-        >>> sorted(c.elements())
-        ['A', 'A', 'B', 'B', 'C', 'C']
-
-        If an element's count has been set to zero or is a negative number,
-        elements() will ignore it.
-
-        '''
-        for elem, count in self.iteritems():
-            for _ in repeat(None, count):
-                yield elem
-
-    # Override dict methods where the meaning changes for Counter objects.
-
-    @classmethod
-    def fromkeys(cls, iterable, v=None):
-        raise NotImplementedError(
-            'Counter.fromkeys() is undefined.  Use Counter(iterable) instead.')
-
-    def update(self, iterable=None, **kwds):
-        '''Like dict.update() but add counts instead of replacing them.
-
-        Source can be an iterable, a dictionary, or another Counter instance.
-
-        >>> c = Counter('which')
-        >>> c.update('witch')           # add elements from another iterable
-        >>> d = Counter('watch')
-        >>> c.update(d)                 # add elements from another counter
-        >>> c['h']                      # four 'h' in which, witch, and watch
-        4
-
-        '''
-        if iterable is not None:
-            if hasattr(iterable, 'iteritems'):
-                if self:
-                    self_get = self.get
-                    for elem, count in iterable.iteritems():
-                        self[elem] = self_get(elem, 0) + count
-                else:
-                    dict.update(self, iterable) # fast path when counter is empty
-            else:
-                self_get = self.get
-                for elem in iterable:
-                    self[elem] = self_get(elem, 0) + 1
-        if kwds:
-            self.update(kwds)
-
-    def copy(self):
-        'Like dict.copy() but returns a Counter instance instead of a dict.'
-        return Counter(self)
-
-    def __delitem__(self, elem):
-        'Like dict.__delitem__() but does not raise KeyError for missing values.'
-        if elem in self:
-            dict.__delitem__(self, elem)
-
-    def __repr__(self):
-        if not self:
-            return '%s()' % self.__class__.__name__
-        items = ', '.join(map('%r: %r'.__mod__, self.most_common()))
-        return '%s({%s})' % (self.__class__.__name__, items)
-
-    # Multiset-style mathematical operations discussed in:
-    #       Knuth TAOCP Volume II section 4.6.3 exercise 19
-    #       and at http://en.wikipedia.org/wiki/Multiset
-    #
-    # Outputs guaranteed to only include positive counts.
-    #
-    # To strip negative and zero counts, add-in an empty counter:
-    #       c += Counter()
-
-    def __add__(self, other):
-        '''Add counts from two counters.
-
-        >>> Counter('abbb') + Counter('bcc')
-        Counter({'b': 4, 'c': 2, 'a': 1})
-
-
-        '''
-        if not isinstance(other, Counter):
-            return NotImplemented
-        result = Counter()
-        for elem in set(self) | set(other):
-            newcount = self[elem] + other[elem]
-            if newcount > 0:
-                result[elem] = newcount
-        return result
-
-    def __sub__(self, other):
-        ''' Subtract count, but keep only results with positive counts.
-
-        >>> Counter('abbbc') - Counter('bccd')
-        Counter({'b': 2, 'a': 1})
-
-        '''
-        if not isinstance(other, Counter):
-            return NotImplemented
-        result = Counter()
-        for elem in set(self) | set(other):
-            newcount = self[elem] - other[elem]
-            if newcount > 0:
-                result[elem] = newcount
-        return result
-
-    def __or__(self, other):
-        '''Union is the maximum of value in either of the input counters.
-
-        >>> Counter('abbb') | Counter('bcc')
-        Counter({'b': 3, 'c': 2, 'a': 1})
-
-        '''
-        if not isinstance(other, Counter):
-            return NotImplemented
-        _max = max
-        result = Counter()
-        for elem in set(self) | set(other):
-            newcount = _max(self[elem], other[elem])
-            if newcount > 0:
-                result[elem] = newcount
-        return result
-
-    def __and__(self, other):
-        ''' Intersection is the minimum of corresponding counts.
-
-        >>> Counter('abbb') & Counter('bcc')
-        Counter({'b': 1})
-
-        '''
-        if not isinstance(other, Counter):
-            return NotImplemented
-        _min = min
-        result = Counter()
-        if len(self) < len(other):
-            self, other = other, self
-        for elem in ifilter(self.__contains__, other):
-            newcount = _min(self[elem], other[elem])
-            if newcount > 0:
-                result[elem] = newcount
-        return result
+    return None
 
 class CLI(cli.Application):
     """RNA-Seq and DNA-Seq short read analysis by mapping to known reference sequences."""
@@ -267,7 +96,8 @@ class CLI(cli.Application):
 """DESCRIPTION: virana vmap - short read mapping for clinical metagenomics.
 
 The virana mapping utility ('vmap') is a wrapper around indexing and mapping
-fascilities of three short read alignments tools, STAR, BWA-MEM, and SMALT.
+fascilities of three short read alignments tools, STAR, BWA-MEM, and SMALT
+(the latter is not well supported yet).
 vmap is able to generate reference indexes for each of these mappers from a
 single FASTA file and then map short reads in FASTQ format against these indexes.
 During mappings, alignments are output as SAM-files, unsorted BAM-files,
@@ -284,18 +114,21 @@ Sensitive Detection of Viral Transcripts in Human Tumor Transcriptomes.
 PLoS Comput Biol 9(10): e1003228. doi:10.1371/journal.pcbi.1003228"""
 
     USAGE = """USAGE: The program has four modes that can be accessed by
-       [vmap | python vmap.py] [rnaindex | dnaindex | rnamap | dnamap]"""
+       [vmap | python vmap.py] [rnaindex | dnaindex | rnamap | dnamap]
+       """
 
     def main(self, *args):
 
-        print 'CLI main'
-
         if args:
+            print self.DESCRIPTION
+            print
             print self.USAGE
             print("ERROR: Unknown command %r" % (args[0]))
             return 1
 
         if not self.nested_command:
+            print self.DESCRIPTION
+            print
             print self.USAGE
             print("ERROR : No command given")
             return 1
@@ -307,7 +140,7 @@ class SAMHits:
     def __init__(self, output_file, sample_id, refseq_filter=None, min_mapping_score=None,\
                      min_alignment_score=None, max_mismatches=None,\
                      max_relative_mismatches=None, min_continiously_matching=None,\
-                     filter_complexity=False):
+                     filter_complexity=False, debug=False):
 
         self.output_file                = bz2.BZ2File(output_file, 'wb', buffering=100 * 1024 * 1024)
         self.sample_id                  = sample_id.translate(None, NON_ID)
@@ -320,8 +153,11 @@ class SAMHits:
         self.min_continiously_matching  = min_continiously_matching
         self.filter_complexity          = filter_complexity
 
-        self.re_matches = re.compile(r'(\d+)M')
-        self.re_dels    = re.compile(r'(\d+)D')
+        self._record_cache  = []
+        self.stored_records = 0
+        self.max_records    = 10000000
+
+        self.debug = debug
 
     def count(self, parsed_line):
 
@@ -337,31 +173,32 @@ class SAMHits:
         if not is_mapped:
             return
 
+        if self.min_continiously_matching and self.min_continiously_matching > max_match:
+                return
+
+        if self.max_mismatches\
+            and int(number_mismatches) > self.max_mismatches:
+            return
+
+        if self.max_relative_mismatches\
+            and int(number_mismatches) / float(len(seq))\
+            > self.max_relative_mismatches:
+            return
+
+        if self.min_mapping_score\
+            and self.min_mapping_score > mapping_score:
+            return
+
+        if self.min_alignment_score\
+            and self.min_alignment_score > alignment_score:
+            return
+
         if self.filter_complexity:
 
             avg_compression = float(len(zlib.compress(seq)))/len(seq)
 
             if avg_compression < 0.5:
                 return
-
-            # length = len(seq)
-            # counts = [seq.count(nuc) for nuc in 'ACGT']
-            # min_count = length * 0.10
-            # max_count = length * 0.50
-            # for count in counts:
-            #     if count < min_count or count > max_count:
-            #         return None
-
-            # counter = Counter()
-            # for i in range(length - 2):
-            #     counter[seq[i: i + 3]] += 1
-            # maximal = length - 4
-
-            # highest = sum([v for k, v in counter.most_common(2)])
-            # if highest > (maximal / 3.0):
-            #     return None
-
-            # self.passed.append(avg_compression)
 
         pair_id = ''
         if is_end1:
@@ -384,137 +221,228 @@ class SAMHits:
         try:
             refseq_group, family, organism, identifier = ref_name.split(';')[:4]
         except ValueError:
-            sys.stderr.write('Read mapped to malformed reference sequence %s, skipping\n' % ref_name)
-            return
-
-        if self.min_continiously_matching:
-
-            if self.min_continiously_matching > max_match:
-                return
-
-        if self.max_mismatches\
-            and int(number_mismatches) > self.max_mismatches:
-            return
-
-        if self.max_relative_mismatches\
-            and int(number_mismatches) / float(len(seq))\
-            > self.max_relative_mismatches:
-            return
-
-        if self.min_mapping_score\
-            and self.min_mapping_score > mapping_score:
-            return
-
-        if self.min_alignment_score\
-            and self.min_alignment_score > alignment_score:
+            logging.error('Warning: read mapped to malformed reference sequence %s, skipping\n' % ref_name)
             return
 
         start = int(ref_position) + 1
 
         self.current_group[2].append([refseq_group, family, organism, identifier, str(start), str(read_end_pos)])
 
-    def _write_group(self):
-        passed = True
+    def _write_group(self, empty_cache=False):
 
-        if self.refseq_filter:
-            passed = False
-            for refseq_group, family, organism, identifier, start, end in self.current_group[2]:
-                if passed:
-                    break
-                for f in self.refseq_filter:
-                    if refseq_group == f:
+        if self.current_group:
+
+            passed = True
+
+            if self.refseq_filter:
+                passed = False
+                for refseq_group, family, organism, identifier, start, end in self.current_group[2]:
+                    if passed:
+                        break
+                    if refseq_group in self.refseq_filter:
                         passed = True
                         break
-        if passed:
-            description = []
-            for identifier in self.current_group[2]:
-                description.append(';'.join(identifier))
-            description = '|'.join(description)
+            if passed:
 
-            record = SeqRecord(Seq(self.current_group[1]))
-            record.id = 'Read;' + self.current_group[0]
-            record.description = description
+                description = []
+                for identifier in self.current_group[2]:
+                    description.append(';'.join(identifier))
 
-            SeqIO.write([record], self.output_file, "fasta")
+                description = '|'.join(description)
+                sequence    = self.current_group[1]
+                identifier  = 'Read;' + self.current_group[0]
+
+                self._record_cache.append('>%s %s\n%s\n' % (identifier, description, sequence))
+                self.stored_records += 1
+
+        if empty_cache or self.stored_records > self.max_records:
+
+            logging.debug('Writing hit records to file')
+
+            self.output_file.writelines(self._record_cache)
+            self.stored_records = 0
+            self._record_cache = []
 
     def write(self):
 
-        self._write_group()
+        self._write_group(empty_cache=True)
         self.output_file.close()
+
 
 class SAMParser:
 
-    def parse(self, line):
+    def __init__(self, fifo_path):
 
-        if line[0] == '@':
-            return None
+        logging.debug('Parsing mapper output from pysam fifo %s' % fifo_path)
+        self.samfile = pysam.Samfile(fifo_path, "r")
 
-        alignment   = HTSeq._HTSeq.SAM_Alignment.from_SAM_line(line)
-        read_name   = alignment.read.name
-        seq         = alignment.read.seq
-        qual        = numpy.array(alignment.read.qual)
-        flag        = alignment.flag
-        cigar       = None
+        logging.debug('Extracting header from pysam fifo...')
+        self.header = self.samfile.header
+        logging.debug('Finished extarcting header...')
 
-        is_paired       = (flag & 1)
-        is_mapped       = not (flag & 4)
-        is_mate_mapped  = alignment.mate_aligned is not None #not (flag & 8)
-        is_reverse      = (flag & 16)
-        is_end1         = (flag & 64)
-        is_end2         = (flag & 128)
-        is_primary      = not (flag & 256)
+    # def parse_htseq_lines(self, stream):
 
-        read_key = (read_name, is_end1)
+    #     logging.debug('Parsing mapper output from lines')
+    #     for line in iter(stream.readline, ''):
 
-        ref_name            = None
-        ref_position        = None
-        mapping_score       = 0
-        mate_ref_name       = None
-        mate_ref_position   = None
-        insert_size         = None
-        alignment_score     = 0
-        read_end_pos        = None
+    #         if line[0] == '@':
+    #             continue
 
-        if is_mate_mapped and alignment.mate_start:
-            mate_ref_name       = alignment.mate_start.chrom
-            mate_ref_position   = alignment.mate_start.start
+    #         alignment  = HTSeq._HTSeq.SAM_Alignment.from_SAM_line(line)
 
-        number_hits         = 0
-        alignment_score     = 0
-        number_mismatches   = 0
+    #         yield line, self.parse_htseq(alignment)
 
-        number_matches      = 0
-        max_match           = 0
+    # def parse_htseq_reader(self, stream):
 
-        if is_mapped:
+    #     logging.debug('Parsing mapper output from reader')
+    #     iterator = HTSeq.SAM_Reader(stream)
 
-            ref_name            = alignment.iv.chrom
-            ref_position        = alignment.iv.start
-            read_end_pos        = alignment.iv.end
-            alignment_score     = alignment.aQual
-            cigar               = alignment.cigar
+    #     for alignment in iterator:
+
+    #         yield alignment.get_sam_line(), self.parse_htseq(alignment)
+
+    def parse(self):
+
+        getrname = self.samfile.getrname
+
+        for alignment in self.samfile:
+
+            read_name   = alignment.qname
+            seq         = alignment.seq
+            qual        = alignment.qual
+            flag        = alignment.flag
+            cigar       = None
+
+            is_paired = alignment.is_paired
+            is_mapped = not alignment.is_unmapped
+            is_mate_mapped = not alignment.mate_is_unmapped
+            is_reverse = alignment.is_reverse
+            is_end1 = alignment.is_read1
+            is_end2 = alignment.is_read2
+            is_primary = not alignment.is_secondary
+
+            read_key = (read_name, is_end1)
+
+            ref_name            = None
+            ref_position        = None
+            mapping_score       = 0
+            mate_ref_name       = None
+            mate_ref_position   = None
+            insert_size         = None
+            alignment_score     = 0
+            read_end_pos        = None
 
             if is_mate_mapped:
-                insert_size         = alignment.inferred_insert_size
+                mate_ref_name       = getrname(alignment.rnext)
+                mate_ref_position   = alignment.pnext
 
-            for c in cigar:
-                if c.type == 'M':
-                    number_matches += c.size
-                    max_match = max(max_match, c.size)
+            number_hits         = 0
+            alignment_score     = 0
+            number_mismatches   = 0
 
-            for tag, value in alignment.optional_fields:
-                if tag == 'NM':
-                    number_hits = value
-                elif tag == 'AS':
-                    alignment_score = value
-                elif tag == 'NH':
-                    number_mismatches = value
+            number_matches      = 0
+            max_match           = 0
 
-        return read_key, read_name, flag, ref_name, ref_position, mapping_score,\
-            cigar, mate_ref_name, mate_ref_position, insert_size, seq, qual,\
-            is_end1, is_end2, number_mismatches, alignment_score,\
-            number_hits, is_reverse, is_primary, is_mapped, is_mate_mapped,\
-            is_paired, number_matches, read_end_pos, max_match
+            if is_mapped:
+
+                ref_name            = getrname(alignment.tid)
+                ref_position        = alignment.pos
+                read_end_pos        = alignment.qend
+                mapping_score       = alignment.mapq
+                cigar               = alignment.cigar
+
+                if is_mate_mapped:
+                    insert_size         = alignment.tlen
+
+                for operation, count in alignment.cigar:
+                    if operation == 0:
+                        number_matches += count
+                        max_match = max(max_match, count)
+
+                for tag, value in alignment.tags:
+                    if tag == 'NM':
+                        number_hits = value
+                    elif tag == 'AS':
+                        alignment_score = value
+                    elif tag == 'NH':
+                        number_mismatches = value
+
+            parsed = read_key, read_name, flag, ref_name, ref_position, mapping_score,\
+                cigar, mate_ref_name, mate_ref_position, insert_size, seq, qual,\
+                is_end1, is_end2, number_mismatches, alignment_score,\
+                number_hits, is_reverse, is_primary, is_mapped, is_mate_mapped,\
+                is_paired, number_matches, read_end_pos, max_match
+
+            yield alignment, parsed
+
+
+    # def parse_htseq(self, alignment):
+
+    #     read_name   = alignment.read.name
+    #     seq         = alignment.read.seq
+    #     qual        = alignment.read.qual
+    #     flag        = alignment.flag
+    #     cigar       = None
+
+    #     is_paired       = (flag & 1)
+    #     is_mapped       = not (flag & 4)
+    #     is_mate_mapped  = alignment.mate_aligned is not None #not (flag & 8)
+    #     is_reverse      = (flag & 16)
+    #     is_end1         = (flag & 64)
+    #     is_end2         = (flag & 128)
+    #     is_primary      = not (flag & 256)
+
+    #     read_key = (read_name, is_end1)
+
+    #     ref_name            = None
+    #     ref_position        = None
+    #     mapping_score       = 0
+    #     mate_ref_name       = None
+    #     mate_ref_position   = None
+    #     insert_size         = None
+    #     alignment_score     = 0
+    #     read_end_pos        = None
+
+    #     if is_mate_mapped and alignment.mate_start:
+    #         mate_ref_name       = alignment.mate_start.chrom
+    #         mate_ref_position   = alignment.mate_start.start
+
+    #     number_hits         = 0
+    #     alignment_score     = 0
+    #     number_mismatches   = 0
+
+    #     number_matches      = 0
+    #     max_match           = 0
+
+    #     if is_mapped:
+
+    #         ref_name            = alignment.iv.chrom
+    #         ref_position        = alignment.iv.start
+    #         read_end_pos        = alignment.iv.end
+    #         mapping_score       = alignment.aQual
+    #         cigar               = alignment.cigar
+
+    #         if is_mate_mapped:
+    #             insert_size         = alignment.inferred_insert_size
+
+    #         for c in cigar:
+    #             if c.type == 'M':
+    #                 number_matches += c.size
+    #                 max_match = max(max_match, c.size)
+
+    #         for tag, value in alignment.optional_fields:
+    #             if tag == 'NM':
+    #                 number_hits = value
+    #             elif tag == 'AS':
+    #                 alignment_score = value
+    #             elif tag == 'NH':
+    #                 number_mismatches = value
+
+    #     return read_key, read_name, flag, ref_name, ref_position, mapping_score,\
+    #         cigar, mate_ref_name, mate_ref_position, insert_size, seq, qual,\
+    #         is_end1, is_end2, number_mismatches, alignment_score,\
+    #         number_hits, is_reverse, is_primary, is_mapped, is_mate_mapped,\
+    #         is_paired, number_matches, read_end_pos, max_match
 
 
 class SAMQuality:
@@ -667,6 +595,7 @@ class SAMQuality:
                     number_hits, is_reverse, is_primary, is_mapped, is_mate_mapped,\
                     is_paired, number_matches, read_end_pos, max_match = parsed_line
 
+        qual                = numpy.array(qual)
         phred_quality       = qual - 33
         avg_phred_quality   = numpy.mean(phred_quality)
         length              = len(seq)
@@ -838,9 +767,10 @@ class SAMQuality:
 class SAMTaxonomy:
     """ Provides taxonomic summary information from a SAM file stream. """
 
-    def __init__(self, file_path):
+    def __init__(self, file_path, sample_id):
 
         self.file_path = file_path
+        self.sample_id = sample_id
 
         self.count_primaries = Counter()
         self.detailed_information = {}
@@ -874,11 +804,12 @@ class SAMTaxonomy:
                 initial = [refseq_group,
                            family,
                            set([gi]),
-                           [int(mapping_score), 1],
+                           [mapping_score, 1],
                            [len(seq), 1],
                            [0, 0],
                            [alignment_score, 1],
                            [number_mismatches, 1],
+                           [max_match, 1],
                            0,
                            0]
 
@@ -887,7 +818,7 @@ class SAMTaxonomy:
             else:
                 entry = self.detailed_information[organism]
                 entry[2].add(gi)
-                entry[3][0] += int(mapping_score)
+                entry[3][0] += mapping_score
                 entry[3][1] += 1
                 entry[4][0] += len(seq)
                 entry[4][1] += 1
@@ -895,6 +826,8 @@ class SAMTaxonomy:
                 entry[6][1] += 1
                 entry[7][0] += number_mismatches
                 entry[7][1] += 1
+                entry[8][0] += max_match
+                entry[8][1] += 1
 
             if is_primary:
                 entry = self.detailed_information[organism]
@@ -908,10 +841,10 @@ class SAMTaxonomy:
 
                 for last_organism in self._last_organisms:
 
-                    self.detailed_information[last_organism][8]\
+                    self.detailed_information[last_organism][9]\
                         += self._last_read_human_prim
 
-                    self.detailed_information[last_organism][9]\
+                    self.detailed_information[last_organism][10]\
                         += self._last_read_human_sec
 
                 self._last_read = read_key
@@ -927,12 +860,12 @@ class SAMTaxonomy:
                 else:
                     self._last_read_human_sec += 1
 
-    def get_summary(self, top=100):
+    def get_summary(self, top=10):
 
         lines = []
 
-        lines.append('%10s\t%20s\t%20s\t%-20s\t%10s\t%10s\t%10s\t%5s\t%5s\t%5s\t%10s\t%10s\n'\
-            % ('Count', 'Group', 'Family', 'Organism', 'Targets', 'ReadLen', 'Hits', 'Map', 'Algn', 'Mism', 'HuP', 'HuS'))
+        lines.append('%40s\t%10s\t%20s\t%20s\t%-20s\t%10s\t%10s\t%5s\t%5s\t%5s\t%5s\t%5s\t%10s\t%10s\n'\
+            % ('Sample', 'Count', 'Group', 'Family', 'Organism', 'Targets', 'ReadLen', 'Hits', 'Map', 'Algn', 'Mism', 'Maxm', 'HuP', 'HuS'))
 
         top_organisms = self.count_primaries.most_common(top)
 
@@ -940,10 +873,11 @@ class SAMTaxonomy:
 
             refseq_group, family, identifiers,\
                 avg_mapping_score, avg_seq_length, avg_number_hits,\
-                avg_alignment_score, avg_nr_mismatches, human_prim, human_sec\
+                avg_alignment_score, avg_nr_mismatches, avg_max_match, human_prim, human_sec\
                 = self.detailed_information[organism]
 
             avg_len = int(avg_seq_length[0] / float(avg_seq_length[1]))
+
             if avg_number_hits[1] == 0:
                 avg_hits = 0
             else:
@@ -959,6 +893,9 @@ class SAMTaxonomy:
             avg_nr_mismatches = int(avg_nr_mismatches[
                                     0] / float(avg_nr_mismatches[1]))
 
+            avg_max_match = int(avg_max_match[
+                                    0] / float(avg_max_match[1]))
+
             nr_ids = len(identifiers)
 
             if count > 10**6:
@@ -970,10 +907,10 @@ class SAMTaxonomy:
             if nr_ids > 10**6:
                 nr_ids = str(round(nr_ids / float(10**6), 3)) + 'M'
 
-            lines.append('%10s\t%20s\t%20s\t%-20s\t%10s\t%10i\t%10i\t%5i\t%5i\t%5i\t%10s\t%10s\n'\
-                % (str(count), refseq_group[:20], family[:20], organism[:20],\
+            lines.append('%40s\t%10s\t%20s\t%20s\t%-20s\t%10s\t%10i\t%5i\t%5i\t%5i\t%5i\t%5i\t%10s\t%10s\n'\
+                % (self.sample_id, str(count), refseq_group[:20], family[:20], organism[:20],\
                     str(nr_ids), avg_len, avg_hits, avg_mapping_score,\
-                    avg_alignment_score, avg_nr_mismatches, str(human_prim),\
+                    avg_alignment_score, avg_nr_mismatches, avg_max_match, str(human_prim),\
                     str(human_sec)))
 
         return lines
@@ -994,6 +931,12 @@ class Index(cli.Application):
 
     def validate_paths(self):
 
+        # Validate path to binary
+        if not which(self.path):
+            sys.stderr.write(
+                'Indexer %s is not existing or not executable' % self.path)
+            sys.exit(1)
+
         # Check if genome directory is existing
         if not os.path.exists(self.reference_file):
             sys.stderr.write(
@@ -1006,7 +949,7 @@ class Index(cli.Application):
                 'Making output directory for index at %s' % self.index_dir)
             os.makedirs(self.index_dir)
 
-    def get_command_line(self):
+    def get_command_line(self, temp_path):
 
         # # Make named pipe to extract genomes
         # pipe_path = os.path.abspath(os.path.join(self.genome_dir, 'pipe.fa'))
@@ -1145,10 +1088,16 @@ class Mapper(cli.Application):
 
         return self.debug
 
-    def validate_paths(self, mapper_executable):
+    def validate_paths(self):
 
-        mapper_path      = self.mapper_path and self.mapper_path or mapper_executable
-        samtools_path    = self.samtools_path and self.samtools_path or 'samtools'
+        # Validate path to binary
+        if not which(self.mapper_path):
+            sys.stderr.write(
+                'Mapper %s is not existing or not executable' % self.mapper_path)
+            sys.exit(1)
+
+        #mapper_path      = self.mapper_path and self.mapper_path or mapper_executable
+        #samtools_path    = self.samtools_path and self.samtools_path or 'samtools'
 
         # Check if genome directory is existing
         if not os.path.exists(self.index_dir):
@@ -1178,74 +1127,110 @@ class Mapper(cli.Application):
 
             if attribute is None or attribute == '':
                 continue
+
             try:
                 with file(attribute, 'a'):
                     os.utime(attribute, None)
+
             except IOError:
                 sys.stderr.write('Could not write output file %s\n' % attribute)
                 sys.exit(1)
 
-        return mapper_path, samtools_path, temp_path
+        return temp_path
 
-    def get_command_line(self, mapper_path, temp_path):
+    def get_command_line(self, temp_path):
         pass
 
-    def run_mapper_process(self, mapper_path, temp_path):
+    def run_mapper_process(self, temp_path, to_fifo=False):
 
-        command_line = ' '.join(self.get_command_line(mapper_path, temp_path))
-        process = subprocess.Popen(command_line, shell=True, stdout=PIPE)
+        command_line = ' '.join(self.get_command_line(temp_path))
 
-        if self.debug:
-            print 'Running: %s' % command_line
+        if to_fifo:
+            logging.debug('Preparing fifo')
+            fifo_path = os.path.join(temp_path, "namedpipe")
+            os.mkfifo(fifo_path)
+            logging.debug('Opening fifo for writing')
+            target = open(fifo_path, 'w+')
+            logging.debug('Opened fifo %s' % fifo_path)
+        else:
+            fifo_path = None
+            target = PIPE
 
-        return process
+        logging.debug('Starting mapper process...')
+        process = subprocess.Popen(command_line, shell=True, stdout=target)
 
-    def setup_outputs(self, samtools_path):
+        logging.debug('Executed mapper with: %s' % command_line)
+
+        return process, fifo_path
+
+    def setup_outputs(self, fifo_path):
+
+        logging.debug('Opening input SAM parser and fifo')
+        parser = SAMParser(fifo_path)
 
         taxonomy = None
         if self.taxonomy:
-            taxonomy = SAMTaxonomy(self.taxonomy)
+
+            if os.path.dirname(self.taxonomy) and not os.path.exists(os.path.dirname(self.taxonomy)):
+                logging.debug('Making directories for output file %s' % self.taxonomy)
+                os.makedirs(os.path.dirname(self.taxonomy))
+
+            logging.debug('Outputting taxonomy to %s', self.taxonomy)
+            taxonomy = SAMTaxonomy(self.taxonomy, self.sample_id)
 
         quality = None
         if self.qual:
+
+            if os.path.dirname(self.qual) and not os.path.exists(os.path.dirname(self.qual)):
+                logging.debug('Making directories for output file %s' % self.qual)
+                os.makedirs(os.path.dirname(self.qual))
+
             quality = SAMQuality(self.qual)
 
         hits = None
         if self.hits:
-            hits = SAMHits(self.hits, self.sample_id, self.hit_filter,
+
+            if os.path.dirname(self.hits) and not os.path.exists(os.path.dirname(self.hits)):
+                logging.debug('Making directories for output file %s' % self.hits)
+                os.makedirs(os.path.dirname(self.hits))
+
+            logging.debug('Outputting virana hits to %s', self.hits)
+            hits = SAMHits(self.hits, self.sample_id, set(self.hit_filter),
                         self.min_mapping_score,
                         self.min_alignment_score,
                         self.max_mismatches,
                         self.max_relative_mismatches,
                         self.min_continiously_matching,
-                        self.filter_complexity)
+                        self.filter_complexity, self.debug)
 
         sam_file = None
         if self.sam:
-            sam_file = open(self.sam, 'w', buffering=100 * 1024 * 1024)
 
-        bam_process = None
+            if os.path.dirname(self.sam) and not os.path.exists(os.path.dirname(self.sam)):
+                logging.debug('Making directories for output file %s' % self.sam)
+                os.makedirs(os.path.dirname(self.sam))
+
+            logging.debug('Outputting SAM file to %s', self.sam)
+            sam_file = pysam.Samfile(self.sam, 'w', header=parser.header)
+
+        bam_file = None
         if self.bam:
-            with open(self.bam, 'wb', buffering=100 * 1024 * 1024) as bam_file:
 
-                command_line = samtools_path + ['view', '-b', '-1', '-S', '-@', '4', '/dev/stdin']
-                command_line = ' '.join(command_line)
+            if os.path.dirname(self.bam) and not os.path.exists(os.path.dirname(self.bam)):
+                logging.debug('Making directories for output file %s' % self.bam)
+                os.makedirs(os.path.dirname(self.bam))
 
-                if self.debug:
-                    print 'Running: %s' % command_line
+            logging.debug('Outputting BAM file to %s', self.sam)
+            bam_file = pysam.Samfile(self.bam, 'wb', header=parser.heade)
 
-                bam_process = subprocess.Popen(command_line, shell=True, stdout=bam_file, stdin=PIPE)
+        return parser, taxonomy, quality, hits, sam_file, bam_file
 
-        parser = None
-        if taxonomy or quality or hits:
-            parser = SAMParser()
+    def post_process(self, bam_file, sam_file, hits, taxonomy, quality, temp_path, fifo_path):
 
-        return parser, taxonomy, quality, hits, sam_file, bam_process
+        logging.info('Mapping completed, writing outputs')
 
-    def post_process(self, bam_process, sam_file, hits, taxonomy, quality, temp_path):
-
-        if bam_process:
-            bam_process.stdin.close()
+        if bam_file:
+            bam_file.close()
 
         if sam_file:
             sam_file.close()
@@ -1254,50 +1239,51 @@ class Mapper(cli.Application):
             hits.write()
 
         if taxonomy:
-            print ''.join(taxonomy.get_summary(10))
             taxonomy.write()
 
         if quality:
             quality.write()
+
+        if fifo_path:
+            os.unlink(fifo_path)
 
         shutil.rmtree(temp_path)
 
     def main(self, *args):
 
         debug = self.setup_logging()
-        mapper_path, samtools_path, temp_path = self.validate_paths(self.mapper_path)
-        mapper_process = self.run_mapper_process(mapper_path, temp_path)
+        temp_path = self.validate_paths()
 
-        parser, taxonomy, quality, hits, sam_file, bam_process = self.setup_outputs(samtools_path)
+
+        logging.debug('Running mapper')
+        mapper_process, fifo_path = self.run_mapper_process(temp_path, to_fifo=True)
+
+        logging.debug('Setting outputs')
+        parser, taxonomy, quality, hits, sam_file, bam_file = self.setup_outputs(fifo_path)
 
         last_time = time.time()
         i = 0
-        for line in iter(mapper_process.stdout.readline, ''):
+        logging.debug('Starting to parse with pysam...')
+        for alignment, parsed_line in parser.parse():
 
             i += 1
 
-            if debug and i > 0 and (i % 100000) == 0:
+            if debug and i > 0 and (i % 1000000) == 0:
                 this_time = time.time()
-                print 'Mapping at %i reads per hour' % ((100000 * 3600) / (this_time - last_time))
+                logging.debug('Mapped %5iM segments; mapping at %5iM segments per hour' % (i/1000000.0, (100000 * 3600 / 1000000.0) / (this_time - last_time)))
                 last_time = this_time
 
             if sam_file:
-                sam_file.write(line)
+                sam_file.write(alignment)
 
-            if bam_process:
-                bam_process.stdin.write(line)
-
-            if line[0] == '@':
-                continue
-
-            if parser:
-                parsed_line = parser.parse(line)
+            if bam_file:
+                sam_file.write(alignment)
 
             if taxonomy:
                 taxonomy.count(parsed_line)
 
-                # if i > 0 and (i % 100000) == 0:
-                #     print ''.join(taxonomy.get_summary(10))
+                if debug and i > 0 and (i % 1000000) == 0:
+                    logging.debug(''.join(taxonomy.get_summary(10)))
 
             if quality:
                 quality.count(parsed_line)
@@ -1305,7 +1291,7 @@ class Mapper(cli.Application):
             if hits:
                 hits.count(parsed_line)
 
-        self.post_process(bam_process, sam_file, hits, taxonomy, quality, temp_path)
+        self.post_process(bam_file, sam_file, hits, taxonomy, quality, temp_path, fifo_path)
 
 
 @CLI.subcommand("rnamap")
@@ -1327,7 +1313,7 @@ class RNAmap(Mapper):
 
     mapper_path = cli.SwitchAttr(['--star_path'], str, mandatory=False,
                           help="Path to STAR executable",
-                          default='')
+                          default='STAR')
 
     samtools_path = cli.SwitchAttr(['--samtools_path'], str, mandatory=False,
                           help="Path to samtools executable",
@@ -1378,7 +1364,7 @@ class RNAmap(Mapper):
                           default='')
 
     sample_id = cli.SwitchAttr(['--sample_id'], str, mandatory=False,
-                          help="Alphanumeric string ([0-9a-zA-Z_-]*) used to designate sample information within the hit file",
+                          help="Alphanumeric string ([0-9a-zA-Z_-]*) used to designate sample information within the hit and taxonomy files",
                           default='no_sample_id')
 
     unmapped1 = cli.SwitchAttr(['--unmapped_end_1'], str, mandatory=False,
@@ -1414,7 +1400,7 @@ class RNAmap(Mapper):
         ["--sensitive"], help="If given, mapping will process slower and more sensitive")
 
 
-    def get_command_line(self, mapper_path, temp_path):
+    def get_command_line(self, temp_path):
 
         first_ends      = []
         second_ends     = []
@@ -1434,7 +1420,8 @@ class RNAmap(Mapper):
         elif first_ends and second_ends:
             reads = [','.join(first_ends), ','.join(second_ends)]
 
-        command_line = [mapper_path] + ['--runMode', 'alignReads',
+        # Option: Use AllBestScore instead of OneBestScore
+        command_line = [self.mapper_path] + ['--runMode', 'alignReads',
                         '--genomeDir', self.index_dir,
                         '--runThreadN', str(self.threads),
                         '--readMatesLengthsIn', 'NotEqual',
@@ -1446,8 +1433,9 @@ class RNAmap(Mapper):
                         '--outSAMunmapped', 'Within',
                         '--outStd', 'SAM',
                         '--outFilterMultimapNmax', '1000',
-                        '--outSAMprimaryFlag', 'AllBestScore',
-                        '--outSAMorder', 'PairedKeepInputOrder']
+                        '--outSAMprimaryFlag', 'OneBestScore',
+                        '--outSAMorder', 'PairedKeepInputOrder',
+                        '--limitOutSAMoneReadBytes', '1000000']
 
         if self.unmapped1 or self.unmapped2:
             command_line += ['--outReadsUnmapped', 'Fastx']
@@ -1473,7 +1461,7 @@ class RNAmap(Mapper):
 
         return command_line
 
-    def post_process(self, bam_process, sam_file, hits, taxonomy, quality, temp_path):
+    def post_process(self, bam_file, sam_file, hits, taxonomy, quality, temp_path, fifo_path):
 
         try:
             if self.unmapped1:
@@ -1496,7 +1484,7 @@ class RNAmap(Mapper):
         except IOError:
             pass
 
-        super(RNAmap, self).post_process(bam_process, sam_file, hits, taxonomy, quality, temp_path)
+        super(RNAmap, self).post_process(bam_file, sam_file, hits, taxonomy, quality, temp_path, fifo_path)
 
 
 
@@ -1550,7 +1538,7 @@ class DNAmap(Mapper):
                           default=False)
 
     sample_id = cli.SwitchAttr(['--sample_id'], str, mandatory=False,
-                          help="Alphanumeric string ([0-9a-zA-Z_-]*) used to designate sample information within the hit file",
+                          help="Alphanumeric string ([0-9a-zA-Z_-]*) used to designate sample information within the hit and taxonomy files",
                           default='no_sample_id')
 
     bam = cli.SwitchAttr(['-b', '--bam'], str, mandatory=False,
@@ -1587,15 +1575,15 @@ class DNAmap(Mapper):
 
     mapper_path = cli.SwitchAttr(['--bwa_path'], str, mandatory=False,
                           help="Path to BWA executable",
-                          default='')
+                          default='bwa')
 
     reads = cli.SwitchAttr(
         ['-r', '--reads'], str, list=True, mandatory=True,
         help="Sets the input reads. Add this parameter twice for paired end reads.")
 
-    def get_command_line(self, mapper_path, temp_path):
+    def get_command_line(self, temp_path):
 
-        command_line = [mapper_path] + ['mem', '-t', str(self.threads), '-M', os.path.join(self.index_dir, 'index')]
+        command_line = [self.mapper_path] + ['mem', '-t', str(self.threads), '-M', os.path.join(self.index_dir, 'index')]
         if self.interleaved:
             command_line += ['-p']
         command_line += self.reads
@@ -1653,7 +1641,7 @@ class VARmap(Mapper):
                           default=False)
 
     sample_id = cli.SwitchAttr(['--sample_id'], str, mandatory=False,
-                          help="Alphanumeric string ([0-9a-zA-Z_-]*) used to designate sample information within the hit file",
+                          help="Alphanumeric string ([0-9a-zA-Z_-]*) used to designate sample information within the hit and taxonomy files",
                           default='no_sample_id')
 
     bam_input = cli.Flag(['--bam_input'],
@@ -1691,7 +1679,7 @@ class VARmap(Mapper):
 
     mapper_path = cli.SwitchAttr(['--smalt_path'], str, mandatory=False,
                           help="Path to SMALT executable",
-                          default='')
+                          default='smalt_x86_64')
 
     debug = cli.Flag(["-d", "--debug"], help="Enable debug information")
 
@@ -1699,9 +1687,9 @@ class VARmap(Mapper):
         ['-r', '--reads'], str, list=True, mandatory=True,
         help="Sets the input reads. Add this parameter twice for paired end reads.")
 
-    def get_command_line(self, mapper_path, temp_path):
+    def get_command_line(self, temp_path):
 
-        command_line = [mapper_path] + ['map', '-f', 'sam', '-l', '-n', self.threads, '-O', '-p']
+        command_line = [self.mapper_path] + ['map', '-f', 'sam', '-l', '-n', self.threads, '-O', '-p']
         if self.sensitive:
             command_line += ['-x']
         command_line += self.reads

@@ -462,7 +462,7 @@ class UniVecDownloader(DataDownloader):
                 yield self._get_fasta_record(record, self.group, family, organism, identifier)
 
 class CLI(cli.Application):
-    """Downloads taxonomically annotated genomic and trasncriptomic reference sequences."""
+    """Downloads taxonomically annotated genomic and transcriptomic reference sequences."""
     PROGNAME = "vref"
     VERSION = "1.0.0"
     DESCRIPTION = \
@@ -480,19 +480,22 @@ Schelhorn S-E, Fischer M, Tolosi L, Altmueller J, Nuernberg P, et al. (2013)
 Sensitive Detection of Viral Transcripts in Human Tumor Transcriptomes.
 PLoS Comput Biol 9(10): e1003228. doi:10.1371/journal.pcbi.1003228"""
 
-    USAGE = """USAGE: The program has four modes that can be accessed by
-       [vref | python vref.py] [fasta, blast] """
+    USAGE = """USAGE: The program has two modes that can be accessed by
+       [vref | python vref.py] [fasta, blast]
+       """
 
     def main(self, *args):
 
-        print 'CLI main'
-
         if args:
+            print self.DESCRIPTION
+            print
             print self.USAGE
             print("ERROR: Unknown command %r" % (args[0]))
             return 1
 
         if not self.nested_command:
+            print self.DESCRIPTION
+            print
             print self.USAGE
             print("ERROR : No command given")
             return 1

@@ -49,24 +49,64 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
-class CLI(cli.Application):
+def which(program):
 
-    """ Homologous region analysis of hit files"""
-    PROGNAME = "vmap"
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+
+    return None
+
+class CLI(cli.Application):
+    """Identification and visualization of homologous regions based on multi-mapping reads."""
+    PROGNAME = "vhom"
     VERSION = "1.0.0"
-    DESCRIPTION = """"""
-    USAGE = """"""
+    DESCRIPTION = \
+    """DESCRIPTION: virana vhom - identification of homologous regions.
+
+    The virana homology utility ('vhom') analyzes the homology relationships
+    within mapped reads in order to extract homologous regions, i.e.
+    nucleotide stretches that display high sequence similarity to a pathogen
+    and, optionally, also to human factors. These regions can be analyzed with
+    regard to the homologous (i.e., transcriptomic and genomic) contexts
+    of the read data. This greatly facilitates delineation of microbial from
+    human sequence regions (i.e., syntenic sequence stretches consisting of
+    assembled reads that align well to several references).
+
+    https://github.com/schelhorn/virana
+
+    Schelhorn S-E, Fischer M, Tolosi L, Altmueller J, Nuernberg P, et al. (2013)
+    Sensitive Detection of Viral Transcripts in Human Tumor Transcriptomes.
+    PLoS Comput Biol 9(10): e1003228. doi:10.1371/journal.pcbi.1003228"""
+
+    USAGE = """USAGE: The program has one mode that can be accessed by
+       [vhom | python vhom.py] regions
+       """
 
     def main(self, *args):
 
         if args:
-            print("Unknown command %r" % (args[0]))
+            print self.DESCRIPTION
+            print
             print self.USAGE
+            print("ERROR: Unknown command %r" % (args[0]))
             return 1
 
         if not self.nested_command:
-            print("No command given")
+            print self.DESCRIPTION
+            print
             print self.USAGE
+            print("ERROR : No command given")
             return 1
 
 class SequenceProxy:
@@ -330,22 +370,22 @@ class LastzRunner:
         query_fasta_path = os.path.abspath(
             os.path.expandvars(query_fasta_path))
 
-        lastz = [self.lastz_path and self.lastz_path or 'lastz']
         if multiple:
-            cline = lastz + [
+            cline = [self.lastz_path] + [
                 reference_fasta_path +
                 '[multiple]', query_fasta_path + '[nameparse=darkspace]',
                 '--format=sam', '--strand=both', '--gapped', '--chain',
                 '--nogfextend', '--seed=match%i' % self.word_length]
 
         else:
-            cline = lastz + [
+            cline = [self.lastz_path] + [
                 reference_fasta_path, query_fasta_path +
                 '[nameparse=darkspace]',
                 '--format=sam', '--strand=both', '--gapped',
                 '--chain', '--nogfextend', '--seed=match%i' % self.word_length]
 
         # Run lastz process
+        logging.debug('Running lastz with command line ' + ' '.join(cline))
         lastz_process = subprocess.Popen(
             ' '.join(cline), shell=True, stdout=PIPE, stderr=PIPE)
 
@@ -1142,6 +1182,12 @@ class RegionStatistics:
 
     def run(self, output_file):
 
+        output_file = os.path.abspath(os.path.expandvars(output_file))
+
+        if os.path.dirname(output_file) and not os.path.exists(os.path.dirname(output_file)):
+            logging.debug('Making directories for output file %s' % output_file)
+            os.makedirs(os.path.dirname(output_file))
+
         for qualified_family_name in os.listdir(self.input_dir):
 
             family_dir = os.path.join(self.input_dir, qualified_family_name)
@@ -1200,7 +1246,7 @@ class RegionRunner(cli.Application):
 
     lastz_path = cli.SwitchAttr(['-z', '--lastz_path'], str, mandatory=False,
                                 help="Path to lastz executable",
-                                default='')
+                                default='lastz')
 
     jalview_jar_dir = cli.SwitchAttr(
         ['-j', '--jalview_jar_dir'], str, mandatory=False,
@@ -1286,11 +1332,23 @@ class RegionRunner(cli.Application):
         # Prepare analysis modules ('runners') for postprocessing homologous
         # regions
         consensus = ConsensusRunner(ambiguity_cutoff=self.ambiguity_cutoff)
-        lastz = LastzRunner(word_length=self.word_length)
+
+        if not which(self.lastz_path) or not which(self.lastz_path):
+            logging.error('Invalid path to lastz: %s' % self.lastz_path)
+            sys.exit(1)
+
+        lastz = LastzRunner(self.lastz_path, word_length=self.word_length)
 
         if self.jalview_jar_dir:
+
+            jalview_path = os.path.join(self.jalview_jar_dir, 'jalview.jar')
+            if not os.path.isfile(jalview_path):
+                logging.error('Invalid path to jalview: %s' % jalview_path)
+                sys.exit(1)
+
             jalview = JalviewRunner(
                 jalview_jar_dir=self.jalview_jar_dir, tmp_dir=self.tmp_dir)
+
         else:
             jalview = None
 

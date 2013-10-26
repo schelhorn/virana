@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 
 import sys
-import os.path
 
 try:
-   from setuptools import setup, Extension
-except ImportError:   
+   from setuptools import setup
+except ImportError:
    sys.stderr.write( "Could not import 'setuptools', falling back to 'distutils'.\n" )
-   from distutils.core import setup, Extension
+   from distutils.core import setup
 
 if sys.version_info[0] < 2 or sys.version_info < 5:
    sys.stderr.write( "Error in setup script for Virana:\n" )
@@ -20,26 +19,23 @@ if sys.version_info[0] >= 3:
    sys.stderr.write( "Please use Python 2.x, x>=7.\n" )
    sys.exit( 1 )
 
-
-
 setup(
     name='Virana',
-    version='1.0.0',
+    version='1.1.0',
     author='Sven-Eric Schelhorn',
     author_email='sven@mpi-inf.mpg.de',
     packages=['virana'],
-    scripts=['bin/vmap','bin/vref','bin/vhom'],
+    scripts=['bin/vmap','bin/vref','bin/vhom', 'bin/vsim'],
     license='LICENSE.txt',
-    description='Python applicaton for performing next-generation sequence analyses on viral targets.',
+    description='Python application for performing metagenomic next-generation sequencing analyses on microbial targets.',
     long_description=open('README.txt').read(),
     install_requires=[
         "plumbum",
-	"numpy",
-	"matplotlib",
+	      "numpy",
+	      "matplotlib",
         "biopython==1.61",
         "pysam",
         "ftputil>=2.4",
-        "HTSeq",
-	"numpy"
+        "HTSeq"
     ],
 )
