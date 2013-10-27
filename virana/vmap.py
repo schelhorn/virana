@@ -159,6 +159,8 @@ class SAMHits:
 
         self.debug = debug
 
+        self.filtered = [0, 0, 0, 0, 0, 0, 0]
+
     def count(self, parsed_line):
 
         if parsed_line is None:
@@ -174,23 +176,28 @@ class SAMHits:
             return
 
         if self.min_continiously_matching and self.min_continiously_matching > max_match:
-                return
+            self.filtered[0] += 1
+            return
 
         if self.max_mismatches\
             and int(number_mismatches) > self.max_mismatches:
+            self.filtered[1] += 1
             return
 
         if self.max_relative_mismatches\
             and int(number_mismatches) / float(len(seq))\
             > self.max_relative_mismatches:
+            self.filtered[2] += 1
             return
 
         if self.min_mapping_score\
             and self.min_mapping_score > mapping_score:
+            self.filtered[3] += 1
             return
 
         if self.min_alignment_score\
             and self.min_alignment_score > alignment_score:
+            self.filtered[4] += 1
             return
 
         if self.filter_complexity:
@@ -198,6 +205,7 @@ class SAMHits:
             avg_compression = float(len(zlib.compress(seq)))/len(seq)
 
             if avg_compression < 0.5:
+                self.filtered[5] += 1
                 return
 
         pair_id = ''
@@ -255,6 +263,10 @@ class SAMHits:
                 self._record_cache.append('>%s %s\n%s\n' % (identifier, description, sequence))
                 self.stored_records += 1
 
+            else:
+
+                self.filtered[6] += 1
+
         if empty_cache or self.stored_records > self.max_records:
 
             logging.debug('Writing hit records to file')
@@ -267,6 +279,10 @@ class SAMHits:
 
         self._write_group(empty_cache=True)
         self.output_file.close()
+
+    def get_filter_counts(self):
+
+        return 'Segments filtered from hit output:\n%10i due to continiously matching,\n%10i due to max mismatches,\n%10i due to max relative mismatches,\n%10i due to min mapping score,\n%10i due to min alignment score,\n%10i due to complexity,\n%10i due to reference groups' %  tuple(self.filtered)
 
 
 class SAMParser:
@@ -360,11 +376,12 @@ class SAMParser:
                         max_match = max(max_match, count)
 
                 for tag, value in alignment.tags:
-                    if tag == 'NM':
+                    tag = tag.upper()
+                    if tag == 'NH':
                         number_hits = value
                     elif tag == 'AS':
                         alignment_score = value
-                    elif tag == 'NH':
+                    elif tag == 'NM':
                         number_mismatches = value
 
             parsed = read_key, read_name, flag, ref_name, ref_position, mapping_score,\
@@ -1150,6 +1167,7 @@ class Mapper(cli.Application):
             fifo_path = os.path.join(temp_path, "namedpipe")
             os.mkfifo(fifo_path)
             logging.debug('Opening fifo for writing')
+            # target = os.open(fifo_path,  os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
             target = open(fifo_path, 'w+')
             logging.debug('Opened fifo %s' % fifo_path)
         else:
@@ -1157,7 +1175,7 @@ class Mapper(cli.Application):
             target = PIPE
 
         logging.debug('Starting mapper process...')
-        process = subprocess.Popen(command_line, shell=True, stdout=target)
+        process = subprocess.Popen(command_line, shell=True, stdout=target, stderr=sys.stderr)
 
         logging.debug('Executed mapper with: %s' % command_line)
 
@@ -1254,24 +1272,38 @@ class Mapper(cli.Application):
         debug = self.setup_logging()
         temp_path = self.validate_paths()
 
-
         logging.debug('Running mapper')
         mapper_process, fifo_path = self.run_mapper_process(temp_path, to_fifo=True)
 
         logging.debug('Setting outputs')
         parser, taxonomy, quality, hits, sam_file, bam_file = self.setup_outputs(fifo_path)
 
-        last_time = time.time()
-        i = 0
+        last_time       = None
+        start_time      = None
+        alignments_all  = 0
+        alignments_last = 0
+
         logging.debug('Starting to parse with pysam...')
         for alignment, parsed_line in parser.parse():
 
-            i += 1
-
-            if debug and i > 0 and (i % 1000000) == 0:
-                this_time = time.time()
-                logging.debug('Mapped %5iM segments; mapping at %5iM segments per hour' % (i/1000000.0, (100000 * 3600 / 1000000.0) / (this_time - last_time)))
-                last_time = this_time
+            if debug:
+                alignments_all  += 1
+                alignments_last += 1
+                now = time.time()
+                if not start_time:
+                    start_time = now
+                    last_time  = now
+                time_diff = (now - last_time)
+                if time_diff > 60:
+                    overal_time_diff    = (now - start_time) / 3600.0
+                    last_time_diff      = (now - last_time) / 3600.0
+                    logging.debug('Runtime %5.1fh\nAnalyzed %5iM alignments;\nanalyzing at average rates of\n%5iM alignments/h (based on overall throughput)\n%5iM alignments/h (based on last minute)' % (overal_time_diff, alignments_all / 10**6, (alignments_all / overal_time_diff) / 10**6, (alignments_last / last_time_diff) / 10**6))
+                    if hits:
+                        logging.debug(hits.get_filter_counts())
+                    if taxonomy:
+                        logging.debug(''.join(taxonomy.get_summary(10)))
+                    last_time = now
+                    alignments_last = 0
 
             if sam_file:
                 sam_file.write(alignment)
@@ -1281,9 +1313,6 @@ class Mapper(cli.Application):
 
             if taxonomy:
                 taxonomy.count(parsed_line)
-
-                if debug and i > 0 and (i % 1000000) == 0:
-                    logging.debug(''.join(taxonomy.get_summary(10)))
 
             if quality:
                 quality.count(parsed_line)
