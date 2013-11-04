@@ -1,4 +1,4 @@
-<tool id="vhom_region" name="Virana Homologous Groups" version="1.1.1">
+<tool id="vhom_region" name="Virana Homologous Groups" version="1.1.2">
 
 <description>Derive homologous groups and regions from hit files. </description>
 
@@ -10,7 +10,12 @@
 
     <command interpreter="python">vhom_regionplot.py --html_file $hom_output --directory ${hom_output.files_path} --stats $stat_output
     
-    --virana_hits $virana_hits
+    --virana_hits $virana_hit
+    
+    #for $i , $s in enumerate($hit_repeat)
+        --virana_hits $s.virana_hits
+    #end for
+
     
     #if $cdna
         --cdna $cdna
@@ -53,7 +58,12 @@
     
     <inputs>
         
-        <param name="virana_hits" type="data" format="hit_bz2" label="Add hit file for analysis" />
+        <param name="virana_hit" type="data" format="hit_bz2,hit" label="Add hit file for analysis" />
+
+        <repeat name="hit_repeat" title="extra hit file">
+            <param name="virana_hits" type="data" format="hit_bz2,hit" label="Add hit file for analysis" />
+        </repeat>
+
         
         <param name="cdna" type="data" format="fasta" optional="True" label="Input fasta file containing human cDNA records" />
         

@@ -46,4 +46,13 @@
     <outputs>
         <data format="fasta" name="output" label="references.fasta"/>
     </outputs>
+    
+    <help>
+        ==================
+         Virana Reference
+        ==================
+        
+        *Virana reference* is a tool that obtains viral, human, fungi, and bacterial references sequences as well as their taxonomic annotation from reference archives.
+         
+    </help>
 </tool>

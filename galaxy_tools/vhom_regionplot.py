@@ -20,6 +20,10 @@ import sys
 
 import colorsys
 
+from numpy import arange
+
+import copy
+
 
 
 
@@ -32,25 +36,44 @@ rcParams['patch.linewidth']=0.5
 rcParams['patch.facecolor'] = 'black'
 rcParams['font.family'] = 'StixGeneral'
 
-
-def color_variants(r,g,b):
-    h,l2,s= colorsys.rgb_to_hls(r,g,b)
-    l=[l2-0.4,l2-0.1,l2+0.2]
-    hexs=[]
-    for i in l:
-        hexs.append(colors.rgb2hex(colorsys.hls_to_rgb(h,i,s)))
-    return hexs
     
-def rgb_color_variants(r,g,b):
-    h,l2,s= colorsys.rgb_to_hls(r,g,b)
-    l=[l2-0.4,l2-0.1,l2+0.2]
-    rgbs={}
-    rgbs["pathogen"]=colorsys.hls_to_rgb(h,l[0],s)
-    rgbs["ambiguous"]=colorsys.hls_to_rgb(h,l[1],s)
-    rgbs["human"]=colorsys.hls_to_rgb(h,l[2],s)
-    return rgbs
+def rgb_color_variants(stat_dict):
+    
+    n_samples=0
+    sample_names=[]
+    
+    for fam,obj in stat_dict.iteritems():
+        if len(obj.samples)>n_samples:
+            n_samples=len(obj.samples)
+        for sample in obj.samples.iterkeys():
+            if sample not in sample_names:
+                sample_names.append(sample)
 
-                
+    
+    assert n_samples == len(sample_names) #iterate over samples -> color_map
+    rgbs={}
+    i=1
+    for sample in sample_names:
+        rgbs[sample]={}
+        h=1.*(i/n_samples)
+        h=float(h)/2.
+        l=[0.1,0.4,0.7]
+        rgbs[sample]["pathogen"]=colorsys.hls_to_rgb(h,l[0],1.0)
+        rgbs[sample]["ambiguous"]=colorsys.hls_to_rgb(h,l[1],1.0)
+        rgbs[sample]["human"]=colorsys.hls_to_rgb(h,l[2],1.0)
+
+        i+=1
+    return rgbs
+def convert_color_map(color_map):
+    deep = copy.deepcopy(color_map)
+    for sample in deep:
+        for state in deep[sample]:
+            deep[sample][state] = colors.rgb2hex(deep[sample][state])
+    return deep
+
+def means(start,stop):
+    list = arange(start,stop)
+    return (float(sum(list))/float(len(list)))                
      
 
 def remove_border(axes=None, top=False, right=False, left=True, bottom=True):
@@ -82,183 +105,186 @@ def remove_border(axes=None, top=False, right=False, left=True, bottom=True):
         
 def generateHTML(stat_dict,file,directory):
     rval=["<html><head><title>Homologous groups and regions derived from hit files </title></head><body><p/>\n"]
-    rval.append('<link rel="stylesheet" type="text/css" href="/static/style/base.css">')
+    #rval.append('<link rel="stylesheet" type="text/css" href="/static/style/base.css">')
     rval.append("<a href='plot.pdf'>Download Plot</a>")
-    #sven create <div> here for some text
-    n_samples=0
-    for sample in stat_dict.iterkeys():
-        n_samples+=1
-        rval.append("<div id=%s_graph></div><p/>"%(sample))
+    rval.append("<div id='graph' class='graph'></div>")
     curr_dir = os.path.dirname(os.path.realpath(__file__))
     shutil.copy(os.path.join(curr_dir,"jquery-1.10.2.min.js"),directory)
     shutil.copy(os.path.join(curr_dir,"jqBarGraph.2.1.js"),directory)
     rval.append("<script type='text/javascript' src='jquery-1.10.2.min.js'></script>")
     rval.append("<script type='text/javascript' src='jqBarGraph.2.1.js'></script>")
-    rval.append('<script>')
-    i=0
-    for sample in stat_dict.iterkeys():
-        i+=1
-        rval.append("%s_array = new Array(" %sample)
-        for family in stat_dict[sample].iterkeys():
-            values=[]
-            for region,data in stat_dict[sample][family].iteritems():
-                  values.append([int(data[0][1]),int(data[0][2]), data[0][0], data[0][3],int(data[0][4]),int(region)])
-            rval.append(str([values,family])+",")
-        rval[-1]=rval[-1][:-1]
-        rval.append(");")
-        rval.append("%s_files=%s;"%(sample,str(getFiles(directory))))	
-        rval.append("$('#%s_graph').jqBarGraph({"%sample)
-        rval.append("sample: '%s',"%sample)
-        rval.append("data: %s_array,"%sample)
-        rval.append("files: %s_files,"%sample)
-        r,g,b,a=cm.hsv(1.*(1-(i/n_samples)))
-        rval.append("colors: %s," %color_variants(r,g,b))
-        rval.append("legend: true,")
-        rval.append("tab: 'reads',")
-        rval.append("title: '<H3>Visualisation of Sample %s</H3>',"%sample)
-        rval.append("width: %d"%((len(stat_dict[sample])*50)+150))
-        rval.append("});")
+    rval.append('<script>')	
+    rval.append("$('#graph').jqBarGraph({")
+    rval.append("data: %s,"%stat_dict)
+    
+    color_map=convert_color_map(rgb_color_variants(stat_dict))
+
+    rval.append("colors: %s," %color_map)
+    rval.append("legend: true,")
+    rval.append("tab: 'reads',")
+    rval.append("title: '<H3>Visualisation of Data</H3>',")
+    rval.append("width: %d"%((len(stat_dict)*50)+150))
+    rval.append("});")
 
     rval.append("</script>")
     
     rval.append( '</body></html>' )
     with open(file,'w') as file:
         file.write("\n".join( rval ))
-def transformDict(stat_dict):
-    dict={}
-    position={}
-    dict_label={}
-    for sample in stat_dict.iterkeys():
-        dict[sample]=[{},{}]
-        position[sample]={}
-        dict_label[sample]={}
-        j=0
-        for family in stat_dict[sample].iterkeys():
-         
-            i=0
-            for region,values in stat_dict[sample][family].iteritems():
-                
-                if i not in dict[sample][0]:
-                    dict[sample][0][i]=[]
-                    dict[sample][1][i]=[]
-                    position[sample][i]=[]
-                    dict_label[sample][i]=[]
-                dict[sample][0][i].append(int(values[0][1]))
-                dict[sample][1][i].append(int(values[0][2]))
-                position[sample][i].append(j)
-                dict_label[sample][i].append(values[0][0])
-                i+=1
-            j+=1
-    return dict,position,dict_label
                     
 def customeLegend(color_map):
     legend_map=[[],[]]
-    for label  in color_map:
-        box=Rectangle((0,0),1,1,color=color_map[label],fill=True)
-        legend_map[0].append(box)
-        legend_map[1].append(label)
-    plt.figlegend(legend_map[0],legend_map[1],loc=8,ncol=len(color_map))        
+    for sample in color_map:
+        legend_map[0].append(Rectangle((0,0),0,0,visible=False))
+        legend_map[1].append(sample)
+        for label  in color_map[sample]:
+            box=Rectangle((0,0),1,1,color=color_map[sample][label],fill=True)
+            legend_map[0].append(box)
+            legend_map[1].append(label)
+    plt.figlegend(legend_map[0],legend_map[1],loc=9,ncol=len(color_map),prop={'size':8})        
     
 
     
     
 def generatePyPlot(stat_dict,output_file):
     pp = PdfPages(output_file)
-    fig = plt.figure()
-    
-    n_samples=len(stat_dict)
-    dict,position,dict_label=transformDict(stat_dict)
+       
+    color_map=rgb_color_variants(stat_dict)
+    n_samples=len(color_map)
+    for plot in ["reads","bp"]:
+        fig=plt.figure()        
+        i=0    
+        for f,fam in stat_dict.iteritems():
+            j=0
+            for s,sample in fam.samples.iteritems():
+                values = []
+                color = []
+                for r,region in sample.regions.iteritems():
+                    values.append(int(getattr(region,plot)))
+                    color.append(color_map[s][region.state])  
+                if(len(values)>1):
+                	b = values[:-1]
+                	b.insert(0,0);
+                	for u in range(1,len(b)):
+                		b[u]+=b[u-1] 	
+                	plt.bar([i+j]*len(values),values,bottom=b,width=0.8,color=color)
+                else:
+                	plt.bar([i+j]*len(values),values,width=0.8,color=color)
                 
-    i=0    
-    for sample in dict.iterkeys():
-        fig = plt.figure()
-        
-        fig.subplots_adjust(bottom=0.25,hspace=0.5)
-        
-        r,g,b,a=cm.hsv(1.*(1-(i/n_samples)))
-        color_map=rgb_color_variants(r,g,b)
-        
-        for sub in [0,1]:
-          plt.subplot(1,2,sub+1)
-          bottom={}
-          for level,values in dict[sample][sub].iteritems():
-              colors=[color_map[r] for r in dict_label[sample][level]]
-
-              if level==0:
-
-                  plt.bar(position[sample][level],values,bottom=0, width=0.8 ,color=colors)
-              else:
-                  lastvalues=[]
-                  for oldpos in range(len(values)):
-                      lastvalues.append(bottom[position[sample][level][oldpos]])         
-
-                  plt.bar(position[sample][level],values, width=0.8,bottom=lastvalues ,color=colors)
-              for pos in range(len(values)):
-                  if position[sample][level][pos] not in bottom:
-                        bottom[position[sample][level][pos]]=values[pos]
-                  else:
-                        bottom[position[sample][level][pos]]+=values[pos]
-          pos=[x+0.4 for x in range(len(stat_dict[sample]))]    
-          plt.xticks(pos, stat_dict[sample].keys(), rotation='vertical')
-          if(sub==0):
+                j+=1
+            i+= 1+n_samples
+        pos=[means(x,x+n_samples)+0.4 for x in arange(0,i+n_samples,1+n_samples)]    
+        plt.xticks(pos, stat_dict.keys(), rotation='vertical')
+        if(plot=="reads"):
             plt.ylabel("Cumulative reads assigned to family")
-          else:
+        if(plot=="bp"):
             plt.ylabel("Cumulative basepairs assigned to family")
-          plt.xlabel("")
-          fig.subplots_adjust(bottom=0.25,wspace=0.5)
-          remove_border()
+        plt.xlabel("")
+        fig.subplots_adjust(bottom=0.25,wspace=0.5,top=0.8)
+        remove_border()
         
         customeLegend(color_map)   
-        plt.suptitle(sample)
         pp.savefig(fig)
-        i+=1
     pp.close()
     
 
 
-def parseStatFile(filename):
+def parseStatFile(filename, directory):
 
     with open(filename,'r') as file:     
         values=[ map(str,line.split('\t')) for line in file ]
 
-        dict={}
+        family_dict={}
         for line in values[1:]:
-            if line[3] not in dict:
-                dict[line[3]]={}
-                dict[line[3]][line[1]]={}
-                dict[line[3]][line[1]][line[2]]=[[line[4],line[5],line[7],line[0],line[6]]]
-            else:
-                if line[1] not in dict[line[3]]:
-                    dict[line[3]][line[1]]={}
-                    dict[line[3]][line[1]][line[2]]=[[line[4],line[5],line[7],line[0],line[6]]]
-                else:
-                    if line[2] not in dict[line[3]][line[1]]:
-                        dict[line[3]][line[1]][line[2]]=[[line[4],line[5],line[7],line[0],line[6]]]
-                    else:
-                         dict[line[3]][line[1]][line[2]].append([line[4],line[5],line[7],line[0],line[6]])        
-#        for key in dict.iterkeys():
-#            for family_key,values in dict[key].iteritems():
-#                for line in values:
-#                    print key,family_key,line
-        return dict
-def getFiles(directory):
-    rval={}
-    dlist = os.listdir(directory)
-    for dire in dlist:
-        if(os.path.isdir(os.path.join(directory,dire))):
-             rval[dire]={}
-             flist = os.listdir(os.path.join(directory,dire))
-             for file in flist:
-                split=file.split("_")
-                region=split[1]
-                if region not in rval[dire]:
-                    rval[dire][region]=[file]
-                else:
-                    rval[dire][region].append(file)
-                         
-    return rval
+            fam_type,fam,region,sample,state,reads,length,bp,coverage=line
+            if fam not in family_dict:
+                family= Family(fam,fam_type,directory=directory)
+                family_dict[fam]=family
+            family_dict[fam].add(sample,region,state,reads,bp,length)        
+        
+    return family_dict
+
+class Family:
+    
+    def __init__(self,name,typ,directory=None,samples=None):
+        self.name=name
+        if samples!=None:
+            self.samples=samples
+        else:
+            self.samples={}
+        self.directory=directory  
+        self.typ=typ
+        if self.directory:
+            self.files=self.__getFiles(directory)
+        else:
+            self.files=None
+    
+    def add(self,sample,region,state,reads,bp,length):
+        if sample not in self.samples:
+            s = Sample(sample)
+            self.samples[sample]=s
+
+        return self.samples[sample].add(region,state,reads,bp,self.files[region],length)
 
         
+    def __getFiles(self,directory):
+        dlist = os.listdir(os.path.join(directory,self.typ+"_"+self.name))
+        dict={}
+        for file in dlist:
+            try:
+                wc,region,suf = file.split("_")
+            except ValueError:
+                continue
+            if region not in dict:
+                dict[region]={}
+            dict[region][suf]=file #bit redundant?! just save TRUE or FALSE?
+        return dict
+        
+    def __str__(self):
+        return "{'type':'%s', 'samples':%s}"%(self.typ,str(self.samples))
+    
+    def __repr__(self):
+        return "{'type':'%s', 'samples':%s}"%(self.typ,str(self.samples))
+              
+class Sample:
+
+    def __init__(self,name,regions=None):
+        self.name=name
+        if regions!=None:
+            self.regions=regions
+        else:
+            self.regions={}
+    def add(self,region,state,reads,bp,files,length):
+        if region not in self.regions:
+            r = Region(region,state,reads,bp,files,length)
+            self.regions[region]=r
+            return True
+        else:
+            return False
+    
+    def __str__(self):
+        return str(self.regions)
+    
+    def __repr__(self):
+        return str(self.regions)            
+                
+
+class Region:
+    
+    def __init__(self,id,state,reads,bp,files,length):
+        self.id=id
+        self.state=state
+        self.reads=reads
+        self.bp=bp
+        self.files=files
+        self.length=length
+    
+    def __str__(self):
+        return "{'state':'%s', 'reads':%s, 'bp':%s, 'files':%s, 'length':%s}" %(self.state,self.reads,self.bp,self.files,self.length)
+    
+    def __repr__(self):
+        return "{'state':'%s', 'reads':%s, 'bp':%s, 'files':%s, 'length':%s}" %(self.state,self.reads,self.bp,self.files,self.length)
+      
 
 if __name__ == "__main__":
     
@@ -274,9 +300,10 @@ if __name__ == "__main__":
     
     args.insert(0,"dummy")
     try:
-        RegionRunner.run(argv=args)
+        sys.exit(1)#RegionRunner.run(argv=args)
     except SystemExit:
-        stat_dict=parseStatFile(options.stat_file)
+        stat_dict=parseStatFile(options.stat_file,options.directory)
+
         generatePyPlot(stat_dict,os.path.join(options.directory,"plot.pdf"))
         generateHTML(stat_dict,options.html_file,options.directory)
     
