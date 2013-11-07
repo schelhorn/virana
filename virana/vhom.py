@@ -150,17 +150,18 @@ class SequenceProxy:
 
     def get_read_record(self, read_id):
 
-        for record_dict in self.hit_records:
-            if read_id in record_dict:
-                record = record_dict[read_id]
-                return SeqRecord(record.seq, record.id, '', '')
+        try:
+            record = self.hit_records[read_id]
+            return SeqRecord(record.seq, record.id, '', '')
 
-        return None
+        except KeyError:
+            logging.debug('SequenceProxy: unknown hit record %s, skipping' % read_id)
+            return None
 
     def get_reference_record(self, identifier):
 
         if not self.reference_records:
-            logging.debug('SequenceProxy: indexing reference records')
+            logging.debug('SequenceProxy: indexing reference records in order to provide viral and human genomic context')
             self.reference_records = SeqIO.index(self.references_path, 'fasta')
 
         try:
@@ -619,7 +620,6 @@ class Group:
         region.add_read(read_id)
 
         for mapping_location in list(pathogen_mapping_locations) + list(human_mapping_locations):
-            print mapping_location
             reference = ';'.join(mapping_location[:-2])
             region.add_reference(
                 reference, int(mapping_location[-2]), int(mapping_location[-1]))
