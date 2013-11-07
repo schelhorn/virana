@@ -5,6 +5,7 @@ import os
 import logging
 import tempfile
 import shutil
+import glob
 
 import subprocess
 import bz2
@@ -118,7 +119,7 @@ class SequenceProxy:
 
         self.human_transcript_records = None
         self.reference_records = None
-        self.hit_records = []
+        self.hit_records = {}
 
         self.transcript_ranges = None
 
@@ -131,12 +132,21 @@ class SequenceProxy:
             hit_handle.read(10)
         except IOError:
             hit_handle = open(hit_file_path, 'rb')
+        except:
+            sys.stderr.write('SequenceProxy: could not process hit file %s due to errors, skipping.\n' % hit_file_path)
+            return
 
-        hit_dict = SeqIO.to_dict(SeqIO.parse(hit_handle, "fasta"))
+        added = 0
+        for hit_record in SeqIO.parse(hit_handle, "fasta"):
+            identifier  = hit_record.id
+            description = hit_record.description.strip().split(' ')[1]
+            if identifier in self.hit_records:
+                self.hit_records[identifier].description += ('|' + description)
+            else:
+                self.hit_records[identifier] = hit_record
+            added += 1
 
-        logging.debug('SequenceProxy: hit file has %i entries' % len(hit_dict))
-
-        self.hit_records.append(hit_dict)
+        logging.debug('SequenceProxy: hit file with %i entries added' % added)
 
     def get_read_record(self, read_id):
 
@@ -609,6 +619,7 @@ class Group:
         region.add_read(read_id)
 
         for mapping_location in list(pathogen_mapping_locations) + list(human_mapping_locations):
+            print mapping_location
             reference = ';'.join(mapping_location[:-2])
             region.add_reference(
                 reference, int(mapping_location[-2]), int(mapping_location[-1]))
@@ -798,61 +809,61 @@ class GroupGenerator:
     def get_groups(self, min_read_number=5):
 
         logging.debug(
-            'GroupGenerator: generating groups from %i hit files, please wait...' %
+            'GroupGenerator: generating groups from %i hit entries, please wait...' %
             len(self.sequence_proxy.hit_records))
 
-        for hit_index in self.sequence_proxy.hit_records:
-            for read_id, record in hit_index.iteritems():
 
-                # Extract mapping locations to human DNA, human transcript, and
-                # pathogen genomes
-                mapping_locations = record.description.strip().split(
-                    ' ')[1].split('|')
+        for read_id, record in self.sequence_proxy.hit_records.iteritems():
 
-                pathogen_families = defaultdict(set)
-                human_mapping_locations = set()
+            # Extract mapping locations to human DNA, human transcript, and
+            # pathogen genomes
+            mapping_locations = record.description.strip().split(
+                ' ')[1].split('|')
 
-                for mapping_location in mapping_locations:
-                    fields = mapping_location.split(';')
+            pathogen_families = defaultdict(set)
+            human_mapping_locations = set()
 
-                    # Convert start and end to integers
-                    fields[-2] = int(fields[-2])  # start
-                    fields[-1] = int(fields[-1])  # end
+            for mapping_location in mapping_locations:
+                fields = mapping_location.split(';')
 
-                    # Add mapping locations to human cDNA or human DNA
-                    if fields[2] == 'Homo_sapiens':
-                        human_mapping_locations.add(tuple(fields))
+                # Convert start and end to integers
+                fields[-2] = int(fields[-2])  # start
+                fields[-1] = int(fields[-1])  # end
 
-                    # Add mapping locations to non-human references
-                    else:
-                        reference_database, family = fields[:2]
-                        if self.reference_database_filter and reference_database\
-                                not in self.reference_database_filter:
-                            continue
-                        if self.pathogen_family_filter and family\
-                                not in self.pathogen_family_filter:
-                            continue
-                        pathogen_families[
-                            (reference_database, family)].add(tuple(fields))
+                # Add mapping locations to human cDNA or human DNA
+                if fields[2] == 'Homo_sapiens':
+                    human_mapping_locations.add(tuple(fields))
 
-                if not pathogen_families:
-                    continue
+                # Add mapping locations to non-human references
+                else:
+                    reference_database, family = fields[:2]
+                    if self.reference_database_filter and reference_database\
+                            not in self.reference_database_filter:
+                        continue
+                    if self.pathogen_family_filter and family\
+                            not in self.pathogen_family_filter:
+                        continue
+                    pathogen_families[
+                        (reference_database, family)].add(tuple(fields))
 
-                # Process the hits to different pathogen families
-                for (reference_database, family), pathogen_locations in pathogen_families.iteritems():
+            if not pathogen_families:
+                continue
 
-                    qualified_family_name = reference_database + '_' + family
+            # Process the hits to different pathogen families
+            for (reference_database, family), pathogen_locations in pathogen_families.iteritems():
 
-                    # Obtain existing group or make new group
-                    if qualified_family_name in self.groups:
-                        group = self.groups[qualified_family_name]
-                    else:
-                        group = Group(family, qualified_family_name,
-                                      self.sequence_proxy, self.tmp_dir)
-                        self.groups[qualified_family_name] = group
+                qualified_family_name = reference_database + '_' + family
 
-                    group.add_region(
-                        read_id, pathogen_locations, human_mapping_locations)
+                # Obtain existing group or make new group
+                if qualified_family_name in self.groups:
+                    group = self.groups[qualified_family_name]
+                else:
+                    group = Group(family, qualified_family_name,
+                                  self.sequence_proxy, self.tmp_dir)
+                    self.groups[qualified_family_name] = group
+
+                group.add_region(
+                    read_id, pathogen_locations, human_mapping_locations)
 
         # Exclude groups that have collected to few reads
         for qualified_family_name, group in self.groups.items():
@@ -1242,7 +1253,7 @@ class RegionRunner(cli.Application):
 
     hit_files = cli.SwitchAttr(
         ['-v', '--virana_hits'], str, list=True, mandatory=True,
-        help="Add hit file for analysis. May be supplied multiple times.")
+        help="Add hit file for analysis. May be supplied multiple times. May contain globbing characters that are expanded to matchin file names.")
 
     lastz_path = cli.SwitchAttr(['-z', '--lastz_path'], str, mandatory=False,
                                 help="Path to lastz executable",
@@ -1276,12 +1287,12 @@ class RegionRunner(cli.Application):
 
     reference_database_filter = cli.SwitchAttr(
         ['-b', '--reference_database_filter'], str, list=True, mandatory=False,
-        help="Specifies which kind of reference databases are consisdered when extracting hits from hit files. May be specified multiple times. If any are specified, all reference databases not specified are filtered out. By default, this parameter is empty.",
+        help="Specifies which kind of reference databases are considered when extracting hits from hit files. May be specified multiple times. If any are specified, all reference databases not specified are filtered out. By default, this parameter is empty.",
         default=[])
 
     pathogen_family_filter = cli.SwitchAttr(
         ['-f', '--pathogen_family_filter'], str, list=True, mandatory=False,
-        help="Specifies which kind of pathogen families are consisdered when extracting hits from hit files. May be specified multiple times. If any are specified, all families not specified are filtered out. By default, this parameter is empty.",
+        help="Specifies which kind of pathogen families are considered when extracting hits from hit files. May be specified multiple times. If any are specified, all families not specified are filtered out. By default, this parameter is empty.",
         default=[])
 
     min_read_number = cli.SwitchAttr(
@@ -1292,12 +1303,12 @@ class RegionRunner(cli.Application):
     max_gap_length = cli.SwitchAttr(
         ['-l', '--max_gap_length'], cli.Range(1, 1000), mandatory=False,
         help="Maximum number bases that two candidate homologous regions are distant from each other with regard to their positions on a common reference sequence in order for being eligable for merging.",
-        default=25)
+        default=50)
 
     min_region_length = cli.SwitchAttr(
         ['-x', '--min_region_length'], cli.Range(1, 1000), mandatory=False,
         help="Minimum number bases of the longest reference sequence of each homologous region that is generated. Shoer regions will be omitted from the results.",
-        default=50)
+        default=100)
 
     word_length = cli.SwitchAttr(
         ['-w', '--word_length'], cli.Range(1, 21), mandatory=False,
@@ -1319,8 +1330,11 @@ class RegionRunner(cli.Application):
 
         # Make sequence proxy for managing hit files, references, and cdna
         proxy = SequenceProxy(self.references_path, self.cdna_path)
+
         for hit_file in self.hit_files:
-            proxy.add_hit_file(hit_file)
+            hit_file = os.path.expandvars(hit_file)
+            for expanded in glob.glob(hit_file):
+                proxy.add_hit_file(expanded)
 
         # Generate homologous groups
         generator = GroupGenerator(proxy,
