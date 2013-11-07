@@ -12,7 +12,6 @@ import numpy
 import pysam
 
 import sys
-import re
 
 import tempfile
 import subprocess
@@ -21,7 +20,6 @@ import os
 import os.path
 import logging
 import bz2
-import zlib
 
 import math
 import string
@@ -31,14 +29,7 @@ from collections import defaultdict, Counter
 from subprocess import PIPE
 import time
 
-try:
-    from Bio.SeqRecord import SeqRecord
-    from Bio import SeqIO
-    from Bio.Seq import Seq
-except ImportError:
-    message = 'This script requires the BioPython python package\n'
-    sys.stderr.write(message)
-    sys.exit(1)
+from zlib import compress
 
 try:
     from plumbum import cli
@@ -200,14 +191,6 @@ class SAMHits:
             self.filtered[4] += 1
             return
 
-        if self.filter_complexity:
-
-            avg_compression = float(len(zlib.compress(seq)))/len(seq)
-
-            if avg_compression < 0.5:
-                self.filtered[5] += 1
-                return
-
         pair_id = ''
         if is_end1:
             pair_id = '/1'
@@ -240,17 +223,28 @@ class SAMHits:
 
         if self.current_group:
 
-            passed = True
+            passed_refseq       = True
+            passed_complexity   = True
 
             if self.refseq_filter:
-                passed = False
+                passed_refseq = False
                 for refseq_group, family, organism, identifier, start, end in self.current_group[2]:
-                    if passed:
-                        break
                     if refseq_group in self.refseq_filter:
-                        passed = True
+                        passed_refseq = True
                         break
-            if passed:
+
+            if not passed_refseq:
+                self.filtered[6] += 1
+
+            if passed_refseq and self.filter_complexity:
+                sequence = self.current_group[1]
+                avg_compression = float(len(compress(sequence)))/len(sequence)
+
+                if avg_compression < 0.5:
+                    passed_complexity = False
+                    self.filtered[5] += 1
+
+            if passed_refseq and passed_complexity:
 
                 description = []
                 for identifier in self.current_group[2]:
@@ -262,10 +256,6 @@ class SAMHits:
 
                 self._record_cache.append('>%s %s\n%s\n' % (identifier, description, sequence))
                 self.stored_records += 1
-
-            else:
-
-                self.filtered[6] += 1
 
         if empty_cache or self.stored_records > self.max_records:
 
@@ -294,7 +284,7 @@ class SAMParser:
 
         logging.debug('Extracting header from pysam fifo...')
         self.header = self.samfile.header
-        logging.debug('Finished extarcting header...')
+        logging.debug('Finished extracting header...')
 
     # def parse_htseq_lines(self, stream):
 
@@ -877,14 +867,17 @@ class SAMTaxonomy:
                 else:
                     self._last_read_human_sec += 1
 
-    def get_summary(self, top=10):
+    def get_summary(self, top=None):
 
         lines = []
 
         lines.append('%40s\t%10s\t%20s\t%20s\t%-20s\t%10s\t%10s\t%5s\t%5s\t%5s\t%5s\t%5s\t%10s\t%10s\n'\
             % ('Sample', 'Count', 'Group', 'Family', 'Organism', 'Targets', 'ReadLen', 'Hits', 'Map', 'Algn', 'Mism', 'Maxm', 'HuP', 'HuS'))
 
-        top_organisms = self.count_primaries.most_common(top)
+        if top:
+            top_organisms = self.count_primaries.most_common(top)
+        else:
+            top_organisms = self.count_primaries.most_common()
 
         for organism, count in top_organisms:
 
@@ -980,6 +973,7 @@ class Index(cli.Application):
 
         # Run index generation process
         command_line = self.get_command_line()
+
         process = subprocess.Popen(' '.join(command_line), shell=True, stdout=PIPE, stderr=PIPE)
 
         # Block until streams are closed by the process
@@ -1162,6 +1156,9 @@ class Mapper(cli.Application):
 
         command_line = ' '.join(self.get_command_line(temp_path))
 
+        if self.debug:
+            logging.debug('Running mapper command line: %s' % command_line)
+
         if to_fifo:
             logging.debug('Preparing fifo')
             fifo_path = os.path.join(temp_path, "namedpipe")
@@ -1238,8 +1235,8 @@ class Mapper(cli.Application):
                 logging.debug('Making directories for output file %s' % self.bam)
                 os.makedirs(os.path.dirname(self.bam))
 
-            logging.debug('Outputting BAM file to %s', self.sam)
-            bam_file = pysam.Samfile(self.bam, 'wb', header=parser.heade)
+            logging.debug('Outputting BAM file to %s', self.bam)
+            bam_file = pysam.Samfile(self.bam, 'wb', header=parser.header)
 
         return parser, taxonomy, quality, hits, sam_file, bam_file
 
@@ -1309,7 +1306,7 @@ class Mapper(cli.Application):
                 sam_file.write(alignment)
 
             if bam_file:
-                sam_file.write(alignment)
+                bam_file.write(alignment)
 
             if taxonomy:
                 taxonomy.count(parsed_line)
@@ -1423,7 +1420,8 @@ class RNAmap(Mapper):
         ['-r', '--reads'], str, list=True, mandatory=True,
         help="Sets the input reads. Add this parameter twice for paired end reads.")
 
-    zipped = cli.Flag(["-z", "--zipped"], help="Input reads are zipped")
+    zipped = cli.Flag(["-z", "--zipped"], help="Input reads are zipped (e.g., using gzip")
+    bzipped = cli.Flag(["--bzipped"], help="Input reads are bzipped (e.g., using bzip2")
 
     sensitive = cli.Flag(
         ["--sensitive"], help="If given, mapping will process slower and more sensitive")
@@ -1464,7 +1462,9 @@ class RNAmap(Mapper):
                         '--outFilterMultimapNmax', '1000',
                         '--outSAMprimaryFlag', 'OneBestScore',
                         '--outSAMorder', 'PairedKeepInputOrder',
-                        '--limitOutSAMoneReadBytes', '1000000']
+                        '--limitOutSAMoneReadBytes', '1000000',
+                        '--limitOutSJcollapsed', '2000000',
+                        '--genomeLoad', 'NoSharedMemory'] # LoadAndRemove
 
         if self.unmapped1 or self.unmapped2:
             command_line += ['--outReadsUnmapped', 'Fastx']
@@ -1474,6 +1474,8 @@ class RNAmap(Mapper):
 
         if self.zipped:
             command_line += ['--readFilesCommand', 'zcat']
+        elif self.bzipped:
+            command_line += ['--readFilesCommand', 'bzip2 -cd']
 
         if self.sensitive:
             command_line += ['--outFilterMultimapScoreRange', '10',
@@ -1590,6 +1592,18 @@ class DNAmap(Mapper):
                           help="Inputs FASTQ is an interleaved paired end file. ",
                           default=False)
 
+    zipped = cli.Flag(['-z', '--zipped'],
+                          help="Inputs FASTQ are zipped (or gz-compressed)",
+                          default=False)
+
+    bzipped = cli.Flag(['--bzipped'],
+                         help="Inputs FASTQ are bzipped (or bz2-compressed)",
+                         default=False)
+
+    fqz = cli.SwitchAttr(['--fqz'], str, mandatory=False,
+                          help="Reads are fqz compressed and this argument specifies the path to fqzcomp's 'fqz_comp' binary",
+                          default=False)
+
     hit_filter = cli.SwitchAttr(
         ['-f', '--virana_hit_filter'], str, list=True, mandatory=False,
         help="Only generate hit groups that include at last one read mapping to a reference of this reference group.",
@@ -1612,10 +1626,22 @@ class DNAmap(Mapper):
 
     def get_command_line(self, temp_path):
 
-        command_line = [self.mapper_path] + ['mem', '-t', str(self.threads), '-M', os.path.join(self.index_dir, 'index')]
+        command_line = [self.mapper_path] + ['mem', '-t', str(self.threads), os.path.join(self.index_dir, 'index')]
+
         if self.interleaved:
             command_line += ['-p']
-        command_line += self.reads
+
+        reads = []
+        if self.zipped:
+            reads = ["'<gzip -cd %s'" % read for read in self.reads]
+        elif self.bzipped:
+            reads = ["'<bzip2 -cd %s'" % read for read in self.reads]
+        elif self.fqz:
+            reads = ["'<%s -d %s'" % (self.fqz, read) for read in self.reads]
+        else:
+            reads = self.reads
+
+        command_line += reads
 
         return command_line
 
