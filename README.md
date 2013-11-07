@@ -1,4 +1,3 @@
-
 # Virana
 
 _The (metagenomic) virus analysis toolkit_
@@ -57,7 +56,7 @@ $ vmap rnamap --index my_rna_index_dir --zipped \
   --reads=viral_reads_1.fq.gz --reads=viral_reads_2.fq.gz \
   --virana_hits=hits.bz2
 # Put all reads into their homologous context and assemble microbial genomes
-$ vhom regions --references=my_genome_db --virana_hits=hits.bz2 \
+$ vhom regions --references=my_genome_db.fa --virana_hits=hits.bz2 \
   --output_dir=my_families 
 ```
 
@@ -177,7 +176,7 @@ Here, we left out human `--splice_junctions` that may be relevant if your input 
 Last, the _hit_ file generated in the previous step can be analyzed with regard to the homologous (i.e., transcriptomic and genomic) contexts of the reads therein. This greatly facilitates delineation of microbial from human sequence regions (i.e., syntenic sequence stretches consisting of assembled reads that align well to several references). This is enabled by the _virana_ homology module `vhom`, running on one or several _hit_ files (the `--virana_hits` argument can be supplied multiple times and the mappings therein will be pooled prior to analysis). In order to identify homologus relationships, genomic `--references` and transcriptomic `--cdna` fasta files as generated before are employed. The homologus regions generated will be restricted to contain a `--min_read_number` of aligned short reads, will have a certain `--max_gap_length` basepairs of gaps that are not covered by any sequence reads, and the whole region including gaps will be at least `--min_region_length` basepairs long. The alignment sensitivity of the sequences that controls the matching of short reads to references has to be high, so we specify a small `--word_length` of 7 (the default). We would like to see alignment plots of all homologous regions, so we specify a `--jalview_jar_dir` where the _jalview.jar_ file of the [Jalview](http://www.jalview.org) distribution is located on your system. `vhom` will generate a directory structure within the `--output_dir` where each subdirectory correponds to a taxonomic family (see next Section). Last, a tabular summary statistic `--region_stats` will be generated that contains high-level information about the homologous regions.
 
 ```shell
-$ vhom regions --references=my_genome_db --cdna=my_transcriptome_db \
+$ vhom regions --references=my_genome_db.fa --cdna=my_transcriptome_db.fa \
   --virana_hits=hits.bz2 --min_read_number=5 --max_gap_length=50 \
   --min_region_length=100 --word_length=7 --jalview_jar_dir=/usr/lib/jalview/
   --output_dir=my_families --region_stats=my_families/stats.txt
