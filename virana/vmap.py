@@ -353,7 +353,7 @@ class SAMParser:
 
                 ref_name            = getrname(alignment.tid)
                 ref_position        = alignment.pos
-                read_end_pos        = alignment.qend
+                read_end_pos        = alignment.aend
                 mapping_score       = alignment.mapq
                 cigar               = alignment.cigar
 
@@ -779,13 +779,24 @@ class SAMTaxonomy:
         self.file_path = file_path
         self.sample_id = sample_id
 
-        self.count_primaries = Counter()
-        self.detailed_information = {}
+        self.count_primaries            = Counter()
+        self.detailed_information       = {}
 
         self._last_read                 = (None, None)
         self._last_read_human_prim      = 0
         self._last_read_human_sec       = 0
         self._last_organisms            = set()
+
+        self.format = '%40s\t%15s\t%20s\t%-20s\t' + '%6s\t' * 24 + '\n'
+
+        self.header = ('Sample','Group', 'Family', 'Organism',\
+                        'AlP', 'AlS', 'AlHP', 'AlHS',\
+                        'MaBP', 'MaBS', 'MaHP', 'MaHS',\
+                        'GIs', 'MapP', 'MapS', 'AlgP', 'AlgS', \
+                        'MisP', 'MisS', 'MatP', 'MatS',\
+                        'MaxP', 'MaxS', 'AlLP', 'AlLS',\
+                        'ReLP', 'ReLS',\
+                        'Span')
 
     def count(self, parsed_line):
 
@@ -793,86 +804,147 @@ class SAMTaxonomy:
             return
 
         read_key, read_name, flag, ref_name, ref_position, mapping_score,\
-                    cigar, mate_ref_name, mate_ref_position, insert_size, seq, qual,\
-                    is_end1, is_end2, number_mismatches, alignment_score,\
-                    number_hits, is_reverse, is_primary, is_mapped, is_mate_mapped,\
-                    is_paired, number_matches, read_end_pos, max_match = parsed_line
+            cigar, mate_ref_name, mate_ref_position, insert_size, seq, qual,\
+            is_end1, is_end2, number_mismatches, alignment_score,\
+            number_hits, is_reverse, is_primary, is_mapped, is_mate_mapped,\
+            is_paired, number_matches, read_end_pos, max_match = parsed_line
 
-        if is_mapped:
+        if not is_mapped:
+            return
 
-            refseq_group, family, organism, gi = ref_name.split(';')[:4]
+        # Determine mapping information
+        refseq_group, family, organism, gi = ref_name.split(';')[:4]
 
+        # Determine mapping information of mate
+        both_mates_same_ref = 0
+        mate_human_ref      = 0
+
+        if is_paired and is_mate_mapped and ref_name == mate_ref_name:
+            both_mates_same_ref = 1
+
+        if is_paired and is_mate_mapped and 'Homo_sapiens' in mate_ref_name:
+            mate_human_ref = 1
+
+        # Count read as a primary hit
+        if is_primary:
+            self.count_primaries[organism] += 1
+
+        if organism not in self.detailed_information:
+            initial = [refseq_group,
+                       family,
+                       set(),            # 02 GIs
+                       [[0, 0], [0, 0]], # 03 Mapping score
+                       [[0, 0], [0, 0]], # 04 Alignment score
+                       [[0, 0], [0, 0]], # 05 Mismatches
+                       [[0, 0], [0, 0]], # 06 Overall length of matched region
+                       [[0, 0], [0, 0]], # 07 Longest continiously matched region
+                       [[0, 0], [0, 0]], # 08 Length of aligned part of read
+                       [[0, 0], [0, 0]], # 09 (Potentially hard skipped) read length
+                       [[0, 0], [0, 0]], # 10 Quality
+                       [0, 0],           # 11 Nr. alignments to organism
+                       [0, 0],           # 12 Nr. alignments also to human
+                       [0, 0],           # 13 nr. both mates to same ref
+                       [0, 0],           # 14 nr. other mate to human
+                       [0, 0]]           # 15 Reference positions (max, min)
+
+            self.detailed_information[organism] = initial
+
+
+        entry = self.detailed_information[organism]
+
+        entry[2].add(gi)
+
+        if is_primary:
+            index = 0
+        else:
+            index = 1
+
+        entry[3][index][0] += mapping_score
+        entry[3][index][1] += 1
+
+        entry[4][index][0] += alignment_score
+        entry[4][index][1] += 1
+
+        entry[5][index][0] += number_mismatches
+        entry[5][index][1] += 1
+
+        entry[6][index][0] += number_matches
+        entry[6][index][1] += 1
+
+        entry[7][index][0] += max_match
+        entry[7][index][1] += 1
+
+        entry[8][index][0] += (read_end_pos - ref_position)
+        entry[8][index][1] += 1
+
+        entry[9][index][0] += len(seq)
+        entry[9][index][1] += 1
+
+        entry[11][index] += 1
+        entry[13][index] += both_mates_same_ref
+        entry[14][index] += mate_human_ref
+
+        if organism != 'Homo_sapiens':
+            if entry[15][0] == 0:
+                entry[15][0] = ref_position
+            if ref_position < entry[15][0]:
+                entry[15][0] = ref_position
+            if ref_position > entry[15][1]:
+                entry[15][1] = ref_position
+
+        # Cache information that is agreggated across all alignments of a read
+        if self._last_read == (None, None):
+            self._last_read = read_key
+
+        if self._last_read != read_key:
+
+            for last_organism in self._last_organisms:
+
+                self.detailed_information[last_organism][12][0]\
+                    += self._last_read_human_prim
+
+                self.detailed_information[last_organism][12][1]\
+                    += self._last_read_human_sec
+
+            self._last_read             = read_key
+            self._last_organisms        = set()
+            self._last_read_human_prim  = 0
+            self._last_read_human_sec   = 0
+
+        self._last_organisms.add(organism)
+
+        if organism == 'Homo_sapiens':
             if is_primary:
-                self.count_primaries[organism] += 1
-
-            if organism not in self.detailed_information:
-                # refseq_group. family, gis, avg_mapping_score,
-                # avg_seq_length, avg_number_hits, avg_alignment_score, avg_nr_mismatches
-                initial = [refseq_group,
-                           family,
-                           set([gi]),
-                           [mapping_score, 1],
-                           [len(seq), 1],
-                           [0, 0],
-                           [alignment_score, 1],
-                           [number_mismatches, 1],
-                           [max_match, 1],
-                           0,
-                           0]
-
-                self.detailed_information[organism] = initial
-
+                self._last_read_human_prim += 1
             else:
-                entry = self.detailed_information[organism]
-                entry[2].add(gi)
-                entry[3][0] += mapping_score
-                entry[3][1] += 1
-                entry[4][0] += len(seq)
-                entry[4][1] += 1
-                entry[6][0] += alignment_score
-                entry[6][1] += 1
-                entry[7][0] += number_mismatches
-                entry[7][1] += 1
-                entry[8][0] += max_match
-                entry[8][1] += 1
+                self._last_read_human_sec += 1
 
-            if is_primary:
-                entry = self.detailed_information[organism]
-                entry[5][0] += number_hits
-                entry[5][1] += 1
 
-            if self._last_read == (None, None):
-                self._last_read = read_key
+    def to_unit(self, count):
 
-            if self._last_read != read_key:
+        if count > 10**9:
+            count = str(round(count / float(10**9), 1)) + 'G'
+        elif count > 10**6:
+            count = str(round(count / float(10**6), 1)) + 'M'
+        elif count > 10**3:
+            count = str(round(count / float(10**3), 1)) + 'k'
+        else:
+            count = str(int(round(count, 0)))
 
-                for last_organism in self._last_organisms:
+        return count
 
-                    self.detailed_information[last_organism][9]\
-                        += self._last_read_human_prim
+    def to_avg(self, item):
 
-                    self.detailed_information[last_organism][10]\
-                        += self._last_read_human_sec
+        primary     = self.to_unit(item[0][0] / float(item[0][1] + 1))
+        secondary   = self.to_unit(item[1][0] / float(item[1][1] + 1))
 
-                self._last_read = read_key
-                self._last_organisms = set()
-                self._last_read_human_prim  = 0
-                self._last_read_human_sec   = 0
-
-            self._last_organisms.add(organism)
-
-            if organism == 'Homo_sapiens':
-                if is_primary:
-                    self._last_read_human_prim += 1
-                else:
-                    self._last_read_human_sec += 1
+        return primary, secondary
 
     def get_summary(self, top=None):
 
         lines = []
 
-        lines.append('%40s\t%10s\t%20s\t%20s\t%-20s\t%10s\t%10s\t%5s\t%5s\t%5s\t%5s\t%5s\t%10s\t%10s\n'\
-            % ('Sample', 'Count', 'Group', 'Family', 'Organism', 'Targets', 'ReadLen', 'Hits', 'Map', 'Algn', 'Mism', 'Maxm', 'HuP', 'HuS'))
+        lines.append(self.format % self.header)
 
         if top:
             top_organisms = self.count_primaries.most_common(top)
@@ -881,47 +953,34 @@ class SAMTaxonomy:
 
         for organism, count in top_organisms:
 
-            refseq_group, family, identifiers,\
-                avg_mapping_score, avg_seq_length, avg_number_hits,\
-                avg_alignment_score, avg_nr_mismatches, avg_max_match, human_prim, human_sec\
-                = self.detailed_information[organism]
+            entry       = self.detailed_information[organism]
 
-            avg_len = int(avg_seq_length[0] / float(avg_seq_length[1]))
+            nr_gis      = self.to_unit(len(entry[2]))
+            map_score   = self.to_avg(entry[3])
+            alg_score   = self.to_avg(entry[4])
+            mismatch    = self.to_avg(entry[5])
+            allmatch    = self.to_avg(entry[6])
+            maxmatch    = self.to_avg(entry[7])
+            alglength   = self.to_avg(entry[8])
+            readlength  = self.to_avg(entry[9])
+            algs        = self.to_unit(entry[11][0]), self.to_unit(entry[11][1])
+            algs_hum    = self.to_unit(entry[12][0]), self.to_unit(entry[12][1])
+            both_mates  = self.to_unit(entry[13][0]), self.to_unit(entry[13][1])
+            hum_mates   = self.to_unit(entry[14][0]), self.to_unit(entry[14][1])
+            ref_span    = self.to_unit(entry[15][1] - entry[15][0])
 
-            if avg_number_hits[1] == 0:
-                avg_hits = 0
-            else:
-                avg_hits = int(avg_number_hits[
-                               0] / float(avg_number_hits[1]))
 
-            avg_mapping_score = int(avg_mapping_score[
-                                    0] / float(avg_mapping_score[1]))
+            data = self.sample_id, entry[0][:20], entry[1][:20], organism[:20],\
+                    algs[0], algs[1], \
+                    algs_hum[0], algs_hum[1], both_mates[0], both_mates[1], \
+                    hum_mates[0], hum_mates[1], \
+                    nr_gis, map_score[0], map_score[1], alg_score[0], alg_score[1], \
+                    mismatch[0], mismatch[1], allmatch[0], allmatch[1], \
+                    maxmatch[0], maxmatch[1], alglength[0], alglength[1], \
+                    readlength[0], readlength[1], \
+                    ref_span
 
-            avg_alignment_score = int(avg_alignment_score[
-                                      0] / float(avg_alignment_score[1]))
-
-            avg_nr_mismatches = int(avg_nr_mismatches[
-                                    0] / float(avg_nr_mismatches[1]))
-
-            avg_max_match = int(avg_max_match[
-                                    0] / float(avg_max_match[1]))
-
-            nr_ids = len(identifiers)
-
-            if count > 10**6:
-                count = str(round(count / float(10**6), 3)) + 'M'
-            if human_prim > 10**6:
-                human_prim = str(round(human_prim / float(10**6), 3)) + 'M'
-            if human_sec > 10**6:
-                human_sec = str(round(human_sec / float(10**6), 3)) + 'M'
-            if nr_ids > 10**6:
-                nr_ids = str(round(nr_ids / float(10**6), 3)) + 'M'
-
-            lines.append('%40s\t%10s\t%20s\t%20s\t%-20s\t%10s\t%10i\t%5i\t%5i\t%5i\t%5i\t%5i\t%10s\t%10s\n'\
-                % (self.sample_id, str(count), refseq_group[:20], family[:20], organism[:20],\
-                    str(nr_ids), avg_len, avg_hits, avg_mapping_score,\
-                    avg_alignment_score, avg_nr_mismatches, avg_max_match, str(human_prim),\
-                    str(human_sec)))
+            lines.append(self.format % data)
 
         return lines
 
@@ -1029,7 +1088,7 @@ class RNAIndex(Index):
                         '--genomeDir', self.index_dir,
                         '--limitGenomeGenerateRAM', str(self.max_ram),
                         '--runThreadN', str(self.threads),
-                        '--genomeFastaFiles'] + self.reference_files
+                        '--genomeFastaFiles'] + [self.reference_file]
 
         # Add parameters for sparse (memory-saving) index generation
         if self.sparse:
@@ -1487,6 +1546,9 @@ class RNAmap(Mapper):
                           '--outFilterMatchNminOverLread', '0.66',
                           '--seedSearchStartLmax', '12',
                           '--winAnchorMultimapNmax', '50']
+
+        if self.splice_junctions:
+            command_line += ['--sjdbFileChrStartEnd', self.splice_junctions, '--sjdbOverhang', '75']
 
         command_line += ['--readFilesIn'] + reads
 

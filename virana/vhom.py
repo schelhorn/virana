@@ -111,7 +111,7 @@ class CLI(cli.Application):
 
 class SequenceProxy:
 
-    def __init__(self, references_path, human_transcripts_path=None):
+    def __init__(self, references_path, human_transcripts_path=None, reference_database_filter=None, pathogen_family_filter=None):
 
         self.references_path = references_path
         self.human_transcripts_path = human_transcripts_path
@@ -121,6 +121,9 @@ class SequenceProxy:
         self.hit_records = {}
 
         self.transcript_ranges = None
+
+        self.reference_database_filter = reference_database_filter
+        self.pathogen_family_filter = pathogen_family_filter
 
     def add_hit_file(self, hit_file_path):
 
@@ -139,11 +142,26 @@ class SequenceProxy:
         for hit_record in SeqIO.parse(hit_handle, "fasta"):
             identifier  = hit_record.id
             description = hit_record.description.strip().split(' ')[1]
-            if identifier in self.hit_records:
-                self.hit_records[identifier].description += ('|' + description)
-            else:
-                self.hit_records[identifier] = hit_record
-            added += 1
+
+            passed = True
+            if self.reference_database_filter:
+                passed = False
+                for filter in self.reference_database_filter:
+                    if filter in description:
+                        passed = True
+                        break
+            if self.pathogen_family_filter:
+                passed = False
+                for filter in self.pathogen_family_filter:
+                    if filter in description:
+                        passed = True
+                        break
+            if passed:
+                if identifier in self.hit_records:
+                    self.hit_records[identifier].description += ('|' + description)
+                else:
+                    self.hit_records[identifier] = hit_record
+                added += 1
 
         logging.debug('SequenceProxy: hit file with %i entries added' % added)
 
@@ -643,7 +661,7 @@ class Group:
             region.add_reference(
                 reference, int(mapping_location[-2]), int(mapping_location[-1]))
 
-        logging.debug('Group: Generated initial region %s' % str(region))
+        # logging.debug('Group: Generated initial region %s' % str(region))
 
         self.regions.append(region)
 
@@ -756,7 +774,7 @@ class Group:
                     if region.overlaps(current, max_gap_length):
                         region.merge(current)
                         region.clean_references(max_gap_length)
-                        logging.debug('Group %s: merged region %s into region %s' % (self.family_name, str(current), str(region)))
+                        # logging.debug('Group %s: merged region %s into region %s' % (self.family_name, str(current), str(region)))
                         potentially_mergable = compared_to
                         merged = True
                         break
@@ -764,7 +782,7 @@ class Group:
                 if not merged:
                     not_mergable.append(current)
                     potentially_mergable = compared_to
-                    logging.debug('Group %s: not merged a region. %i potentially mergable candidate regions remaining' % (self.family_name, len(potentially_mergable)))
+                    # logging.debug('Group %s: not merged a region. %i potentially mergable candidate regions remaining' % (self.family_name, len(potentially_mergable)))
 
             results = not_mergable + potentially_mergable
 
@@ -857,8 +875,8 @@ class GroupGenerator:
                 fields[-1] = int(fields[-1])  # end
 
                 if fields[-1] - fields[-2] > (10 * len(record)):
-                    logging.debug('GroupGenerator: Skipping mapping location %s that splits read %s (...) across a reference region more than 10 times the read length' % (mapping_location, read_id[:30]))
-                    continue
+                    logging.debug('GroupGenerator: Trimming mapping location %s that splits read %s (...) across a reference region more than 10 times the read length' % (mapping_location, read_id[:30]))
+                    fields[-1] = fields[-2] + len(record)
 
                 # Add mapping locations to human cDNA or human DNA
                 if fields[2] == 'Homo_sapiens':
@@ -873,6 +891,7 @@ class GroupGenerator:
                     if self.pathogen_family_filter and family\
                             not in self.pathogen_family_filter:
                         continue
+
                     pathogen_families[
                         (reference_database, family)].add(tuple(fields))
 
@@ -928,15 +947,15 @@ class Region:
 
     def add_reference(self, name, start, end):
 
-        logging.debug('Region: added reference %s (%i-%i)' % (name, start, end))
+        # logging.debug('Region: added reference %s (%i-%i)' % (name, start, end))
 
         assert start < end
         self.length = None
         self.longest_reference_id = None
         self.references[name].add((start, end))
 
-        self.sorted_reference_positions = None
-        self.length = None
+        # self.sorted_reference_positions = None
+        # self.length = None
 
     def add_read(self, name):
 
@@ -1122,7 +1141,7 @@ class Region:
                     distance = self._distance((start, end),
                                              (other_start, other_end))
                     if distance <= max_gap_length:
-                        logging.debug('Region: Found overlap using reference %s and positions (%i,%i) and positions (%i,%i)' % (reference, start, end, other_start, other_end))
+                        # logging.debug('Region: Found overlap using reference %s and positions (%i,%i) and positions (%i,%i)' % (reference, start, end, other_start, other_end))
                         return True
         return False
 
@@ -1384,7 +1403,7 @@ class RegionRunner(cli.Application):
             logging.getLogger().setLevel(logging.DEBUG)
 
         # Make sequence proxy for managing hit files, references, and cdna
-        proxy = SequenceProxy(self.references_path, self.cdna_path)
+        proxy = SequenceProxy(self.references_path, self.cdna_path, self.reference_database_filter, self.pathogen_family_filter)
 
         for hit_file in self.hit_files:
             hit_file = os.path.expandvars(hit_file)
