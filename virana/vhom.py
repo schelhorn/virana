@@ -15,6 +15,8 @@ from shutil import rmtree
 from subprocess import PIPE
 from collections import defaultdict
 
+from zlib import compress
+
 try:
     import pysam
 except ImportError:
@@ -111,7 +113,7 @@ class CLI(cli.Application):
 
 class SequenceProxy:
 
-    def __init__(self, references_path, human_transcripts_path=None, reference_database_filter=None, pathogen_family_filter=None):
+    def __init__(self, references_path, human_transcripts_path=None, reference_database_filter=None, pathogen_family_filter=None, complexity_filter=False):
 
         self.references_path = references_path
         self.human_transcripts_path = human_transcripts_path
@@ -124,6 +126,7 @@ class SequenceProxy:
 
         self.reference_database_filter = reference_database_filter
         self.pathogen_family_filter = pathogen_family_filter
+        self.complexity_filter = complexity_filter
 
     def add_hit_file(self, hit_file_path):
 
@@ -156,7 +159,16 @@ class SequenceProxy:
                     if filter in description:
                         passed = True
                         break
+
             if passed:
+
+                if self.complexity_filter:
+
+                    avg_compression = float(len(compress(hit_record.seq._data)))/len(hit_record)
+
+                    if avg_compression < 0.5:
+                        continue
+
                 if identifier in self.hit_records:
                     self.hit_records[identifier].description += ('|' + description)
                 else:
@@ -1369,6 +1381,8 @@ class RegionRunner(cli.Application):
         help="Specifies which kind of pathogen families are considered when extracting hits from hit files. May be specified multiple times. If any are specified, all families not specified are filtered out. By default, this parameter is empty.",
         default=[])
 
+    complexity_filter = cli.Flag(["--complexity_filter"], help="Filter low-complxity sequences from Hits")
+
     min_read_number = cli.SwitchAttr(
         ['-m', '--min_read_number'], cli.Range(1, 1000), mandatory=False,
         help="Minimum number of reads that are required to be present in homologous region. Regions with fewer reads will be omitted from the results.",
@@ -1403,7 +1417,7 @@ class RegionRunner(cli.Application):
             logging.getLogger().setLevel(logging.DEBUG)
 
         # Make sequence proxy for managing hit files, references, and cdna
-        proxy = SequenceProxy(self.references_path, self.cdna_path, self.reference_database_filter, self.pathogen_family_filter)
+        proxy = SequenceProxy(self.references_path, self.cdna_path, self.reference_database_filter, self.pathogen_family_filter, self.complexity_filter)
 
         for hit_file in self.hit_files:
             hit_file = os.path.expandvars(hit_file)

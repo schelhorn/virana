@@ -1520,7 +1520,6 @@ class RNAmap(Mapper):
                         '--outStd', 'SAM',
                         '--outFilterMultimapNmax', '1000',
                         '--outSAMprimaryFlag', 'OneBestScore',
-                        '--outSAMorder', 'PairedKeepInputOrder',
                         '--limitOutSAMoneReadBytes', '1000000',
                         '--limitOutSJcollapsed', '2000000',
                         '--genomeLoad', 'NoSharedMemory'] # LoadAndRemove
