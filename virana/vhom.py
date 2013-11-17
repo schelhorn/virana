@@ -10,11 +10,12 @@ import glob
 import subprocess
 import bz2
 import re
-import glob
 
 from shutil import rmtree
 from subprocess import PIPE
-from collections import defaultdict, Counter
+from collections import defaultdict
+
+from zlib import compress
 
 try:
     import pysam
@@ -112,7 +113,7 @@ class CLI(cli.Application):
 
 class SequenceProxy:
 
-    def __init__(self, references_path, human_transcripts_path=None):
+    def __init__(self, references_path, human_transcripts_path=None, reference_database_filter=None, pathogen_family_filter=None, complexity_filter=False):
 
         self.references_path = references_path
         self.human_transcripts_path = human_transcripts_path
@@ -122,6 +123,10 @@ class SequenceProxy:
         self.hit_records = {}
 
         self.transcript_ranges = None
+
+        self.reference_database_filter = reference_database_filter
+        self.pathogen_family_filter = pathogen_family_filter
+        self.complexity_filter = complexity_filter
 
     def add_hit_file(self, hit_file_path):
 
@@ -140,11 +145,35 @@ class SequenceProxy:
         for hit_record in SeqIO.parse(hit_handle, "fasta"):
             identifier  = hit_record.id
             description = hit_record.description.strip().split(' ')[1]
-            if identifier in self.hit_records:
-                self.hit_records[identifier].description += ('|' + description)
-            else:
-                self.hit_records[identifier] = hit_record
-            added += 1
+
+            passed = True
+            if self.reference_database_filter:
+                passed = False
+                for filter in self.reference_database_filter:
+                    if filter in description:
+                        passed = True
+                        break
+            if self.pathogen_family_filter:
+                passed = False
+                for filter in self.pathogen_family_filter:
+                    if filter in description:
+                        passed = True
+                        break
+
+            if passed:
+
+                if self.complexity_filter:
+
+                    avg_compression = float(len(compress(hit_record.seq._data)))/len(hit_record)
+
+                    if avg_compression < 0.5:
+                        continue
+
+                if identifier in self.hit_records:
+                    self.hit_records[identifier].description += ('|' + description)
+                else:
+                    self.hit_records[identifier] = hit_record
+                added += 1
 
         logging.debug('SequenceProxy: hit file with %i entries added' % added)
 
@@ -161,12 +190,16 @@ class SequenceProxy:
     def get_reference_record(self, identifier):
 
         if not self.reference_records:
-            logging.debug('SequenceProxy: indexing reference records in order to provide viral and human genomic context')
-            self.reference_records = SeqIO.index(self.references_path, 'fasta')
+            logging.debug('SequenceProxy: indexing reference records (this may take a while)')
+            try:
+                self.reference_records = SeqIO.index(self.references_path, 'fasta')
+            except:
+                logging.error('SequenceProxy: Unable to read from %s' % self.references_path)
 
         try:
             record = self.reference_records[identifier]
             return SeqRecord(record.seq, record.id, '', '')
+
         except KeyError:
             return None
 
@@ -176,7 +209,7 @@ class SequenceProxy:
             return None
 
         if not self.human_transcript_records:
-            logging.debug('SequenceProxy: indexing human transcripts')
+            logging.debug('SequenceProxy: indexing human transcripts (this may take a while)')
             self.human_transcript_records = SeqIO.index(
                 self.human_transcripts_path, 'fasta')
 
@@ -327,21 +360,26 @@ class LastzRunner:
 
     def __init__(self, lastz_path=None, word_length=7):
 
-        self.lastz_path = lastz_path
-        self.word_length = word_length
+        self.lastz_path         = lastz_path
+        self.word_length        = word_length
 
     def align_to_bam_file(self, reference_fasta_path, query_fasta_path, output_bam_path, multiple=False, assert_record=None):
 
         logging.debug('LastzRunner: running on reference %s and query %s' %
                      (reference_fasta_path, query_fasta_path))
+
         output_sam_path = os.path.abspath(
             os.path.expandvars(output_bam_path.replace('.bam', '.sam')))
+
         output_bam_unsorted_path = os.path.abspath(
             os.path.expandvars(output_bam_path + '.unsorted'))
 
         logging.debug(
             'LastzRunner: aligning with output in temporary sam file %s' %
             output_sam_path)
+
+
+
         with open(output_sam_path, 'w') as output_sam_handler:
             for line in self._align(reference_fasta_path, query_fasta_path, multiple):
                 output_sam_handler.write(line)
@@ -378,8 +416,11 @@ class LastzRunner:
 
         reference_fasta_path = os.path.abspath(
             os.path.expandvars(reference_fasta_path))
+
         query_fasta_path = os.path.abspath(
             os.path.expandvars(query_fasta_path))
+
+        reference_record = SeqIO.parse(open(reference_fasta_path, "rU"), "fasta").next()
 
         if multiple:
             cline = [self.lastz_path] + [
@@ -406,11 +447,14 @@ class LastzRunner:
         for i, line in enumerate(iter(lastz_process.stdout.readline, '')):
             if line.startswith('@'):
                 yield line
+
+            # Post-process reads in order to keep best match
             elif line.lower().startswith('read'):
 
-                fields = line.split('\t')
-                read_name = fields[0]
-                read_cigar = fields[5]
+                fields      = line.split('\t')
+                read_name   = fields[0]
+                read_cigar  = fields[5]
+
                 if not alignments:
                     alignments = [read_name, line, read_cigar]
                     continue
@@ -428,9 +472,13 @@ class LastzRunner:
                     else:
                         yield line
                     alignments = []
+
+            # Do not post-process references
             else:
                 yield line
 
+        # Add reference record as an additional SAM entry
+        yield '\t'.join([reference_record.id, '0', reference_record.id, '1', '255', str(len(reference_record)) + 'M', '*', '*', '*', reference_record.seq._data, '*'])
 
 class ConsensusRunner:
 
@@ -620,9 +668,12 @@ class Group:
         region.add_read(read_id)
 
         for mapping_location in list(pathogen_mapping_locations) + list(human_mapping_locations):
+
             reference = ';'.join(mapping_location[:-2])
             region.add_reference(
                 reference, int(mapping_location[-2]), int(mapping_location[-1]))
+
+        # logging.debug('Group: Generated initial region %s' % str(region))
 
         self.regions.append(region)
 
@@ -692,8 +743,12 @@ class Group:
         logging.debug('Group %s: filtering %i candidate regions' %
                       (self.family_name, len(self.regions)))
 
-        filtered = [r for r in self.regions if len(
-            r) >= min_read_number and r.get_longest_reference_length() >= min_region_length]
+
+        filtered = []
+        for region in self.regions:
+            if len(region) >= min_read_number and  region.get_longest_reference_length() >= min_region_length:
+                filtered.append(region)
+                logging.debug('Group: Region %s passed filtering' % region)
 
         ordered = sorted(filtered, reverse=True)
 
@@ -731,7 +786,7 @@ class Group:
                     if region.overlaps(current, max_gap_length):
                         region.merge(current)
                         region.clean_references(max_gap_length)
-                        #logging.debug('Group %s: merged a region. %i potentially mergable candidate regions remaining' % (self.family_name, len(potentially_mergable)))
+                        # logging.debug('Group %s: merged region %s into region %s' % (self.family_name, str(current), str(region)))
                         potentially_mergable = compared_to
                         merged = True
                         break
@@ -739,7 +794,7 @@ class Group:
                 if not merged:
                     not_mergable.append(current)
                     potentially_mergable = compared_to
-                    #logging.debug('Group %s: not merged a region. %i potentially mergable candidate regions remaining' % (self.family_name, len(potentially_mergable)))
+                    # logging.debug('Group %s: not merged a region. %i potentially mergable candidate regions remaining' % (self.family_name, len(potentially_mergable)))
 
             results = not_mergable + potentially_mergable
 
@@ -772,7 +827,8 @@ class Group:
                         region.add_transcript(transcript_identifier)
                         added_transcripts += 1
 
-            logging.debug('Group %s: added %i transcripts to a region' %
+            if added_transcripts:
+                logging.debug('Group %s: added %i transcripts to a region' %
                           (self.family_name, added_transcripts))
 
     def __str__(self):
@@ -830,6 +886,10 @@ class GroupGenerator:
                 fields[-2] = int(fields[-2])  # start
                 fields[-1] = int(fields[-1])  # end
 
+                if fields[-1] - fields[-2] > (10 * len(record)):
+                    logging.debug('GroupGenerator: Trimming mapping location %s that splits read %s (...) across a reference region more than 10 times the read length' % (mapping_location, read_id[:30]))
+                    fields[-1] = fields[-2] + len(record)
+
                 # Add mapping locations to human cDNA or human DNA
                 if fields[2] == 'Homo_sapiens':
                     human_mapping_locations.add(tuple(fields))
@@ -843,6 +903,7 @@ class GroupGenerator:
                     if self.pathogen_family_filter and family\
                             not in self.pathogen_family_filter:
                         continue
+
                     pathogen_families[
                         (reference_database, family)].add(tuple(fields))
 
@@ -898,10 +959,15 @@ class Region:
 
     def add_reference(self, name, start, end):
 
+        # logging.debug('Region: added reference %s (%i-%i)' % (name, start, end))
+
         assert start < end
         self.length = None
         self.longest_reference_id = None
         self.references[name].add((start, end))
+
+        # self.sorted_reference_positions = None
+        # self.length = None
 
     def add_read(self, name):
 
@@ -954,7 +1020,9 @@ class Region:
             # Cut and write references
             human_positions = []
             pathogen_positions = []
-            for length, identifier, start, end in self.get_sorted_reference_positions():
+
+            # Skip the longest reference ([1:]) since we use that one as the alignment reference anyways
+            for length, identifier, start, end in list(self.get_sorted_reference_positions())[1:]:
                 if ';Homo_sapiens;' in identifier:
                     human_positions.append((identifier, start, end))
                 else:
@@ -968,8 +1036,7 @@ class Region:
                     SeqIO.write(
                         [record[start - 1:end]], output_handler, "fasta")
                 else:
-                    pass
-                    #logging.debug('Region: could not retrieve reference %s' % identifier)
+                    logging.debug('Region: could not retrieve reference %s, skipping' % identifier)
 
             # Write full-length transcripts
             for identifier in self.transcripts:
@@ -1010,13 +1077,30 @@ class Region:
 
         # Write reference fasta
         queries_path = self.get_unaligned_fasta_path()
-        first_record = SeqIO.parse(open(queries_path, "rU"), "fasta").next()
         reference_path = os.path.join(self.get_tmp_path(), 'reference.fa')
 
         logging.debug(
             'Region: writing longest reference to %s' % reference_path)
 
-        SeqIO.write([first_record], reference_path, "fasta")
+        # Get longest reference record for which we have a sequence available
+        longest_ref_entry   = []
+        for entry in self.get_sorted_reference_positions():
+            if self.sequence_proxy.get_reference_record(entry[1]) is not None:
+                longest_ref_entry = entry
+                break
+
+        assert longest_ref_entry[1], 'Region: cannot derive longest reference, aborting.'
+
+        longest_ref_id      = longest_ref_entry[1]
+        longest_ref_start   = longest_ref_entry[2]
+        longest_ref_end     = longest_ref_entry[3]
+        longest_ref_record  = self.sequence_proxy.get_reference_record(longest_ref_id)
+
+        logging.debug(
+            'Region: identified longest reference record %s, start %i, end %i' %
+            (str(longest_ref_record).replace('\n',' '), longest_ref_start, longest_ref_end))
+
+        SeqIO.write([longest_ref_record[longest_ref_start-1:longest_ref_end]], reference_path, "fasta")
 
         # Do alignment
         bam_path = os.path.join(self.get_tmp_path(), 'aligned.bam')
@@ -1069,6 +1153,7 @@ class Region:
                     distance = self._distance((start, end),
                                              (other_start, other_end))
                     if distance <= max_gap_length:
+                        # logging.debug('Region: Found overlap using reference %s and positions (%i,%i) and positions (%i,%i)' % (reference, start, end, other_start, other_end))
                         return True
         return False
 
@@ -1153,6 +1238,7 @@ class Region:
 
         lengths = []
         for reference, the_set in self.references.iteritems():
+
             for start, end in the_set:
                 lengths.append([end - start, reference, start, end])
 
@@ -1295,6 +1381,8 @@ class RegionRunner(cli.Application):
         help="Specifies which kind of pathogen families are considered when extracting hits from hit files. May be specified multiple times. If any are specified, all families not specified are filtered out. By default, this parameter is empty.",
         default=[])
 
+    complexity_filter = cli.Flag(["--complexity_filter"], help="Filter low-complxity sequences from Hits")
+
     min_read_number = cli.SwitchAttr(
         ['-m', '--min_read_number'], cli.Range(1, 1000), mandatory=False,
         help="Minimum number of reads that are required to be present in homologous region. Regions with fewer reads will be omitted from the results.",
@@ -1329,7 +1417,7 @@ class RegionRunner(cli.Application):
             logging.getLogger().setLevel(logging.DEBUG)
 
         # Make sequence proxy for managing hit files, references, and cdna
-        proxy = SequenceProxy(self.references_path, self.cdna_path)
+        proxy = SequenceProxy(self.references_path, self.cdna_path, self.reference_database_filter, self.pathogen_family_filter, self.complexity_filter)
 
         for hit_file in self.hit_files:
             hit_file = os.path.expandvars(hit_file)
