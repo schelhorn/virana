@@ -1687,7 +1687,7 @@ class DNAmap(Mapper):
 
     def get_command_line(self, temp_path):
 
-        command_line = [self.mapper_path] + ['mem', '-t', str(self.threads), os.path.join(self.index_dir, 'index')]
+        command_line = [self.mapper_path] + ['mem', '-M', '-t', str(self.threads), os.path.join(self.index_dir, 'index')]
 
         if self.interleaved:
             command_line += ['-p']
