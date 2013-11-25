@@ -25,8 +25,7 @@ Virana, _the virus analysis toolkit_, is a Python-based software toolkit for ana
 - identify microbial nucleotide sequences in transcriptomic and genomic short read data with very high computational performance of 50M reads/hour/core (for RNA-Seq data).
 - identify microbial transcripts diverged from known references at high sensitivity even at 10% nucleotide divergence or more (yes, that is a lot for short read mappers)
 - assemble identified microbial genomes and transcripts based on known references and put them in a context of homologous human factors (splice variants, genomic loci)
-- thus identify nucleotide sequences with very low abundances by pooling reads across multiple samples and using reference-based assembly of syntenic regions
-- identify nucleotide sequences homologous to human factors
+- identify nucleotide sequences with very low abundances by pooling reads across multiple samples and using reference-based assembly of syntenic regions
 - produce concise visualizations of all homologous contexts as well as an array of other output options that facilitate in-depth analysis of putative microbial signatures.
 
 Despite its name, _Virana_ does work not only for viruses (although it's there where it can use its advantages the most) but also other microbial organisms such as bacteria, fungi, and protists. _Virana_ can also applied to search for viral nucleotides in model organisms other than human or in sequence data of organisms for which no sequence assembly exists; however, _Virana_ is best used for organisms with a good reference as well as know splice site annotatios and known cDNA sequences; only in this case many of the unique features (i.e., the analysis of multimapping reads) can be used to full extend.
