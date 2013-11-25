@@ -22,7 +22,7 @@ _The (metagenomic) virus analysis toolkit_
 
 Virana, _the virus analysis toolkit_, is a Python-based software toolkit for analyzing metatranscriptomic (and, to a degree, metagenomic) sequence data in a context of clinical metagenomics in order to:
 
-- identify microbial nucleotide sequences in transcriptomic and genomic short read data with very high computational performance of 100M reads/hour.
+- identify microbial nucleotide sequences in transcriptomic and genomic short read data with very high computational performance of 50M reads/hour/core (for RNA-Seq data).
 - identify microbial transcripts diverged from known references at high sensitivity even at 10% nucleotide divergence or more (yes, that is a lot for short read mappers)
 - assemble identified microbial genomes and transcripts based on known references and put them in a context of homologous human factors (splice variants, genomic loci)
 - thus identify nucleotide sequences with very low abundances by pooling reads across multiple samples and using reference-based assembly of syntenic regions
