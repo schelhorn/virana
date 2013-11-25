@@ -128,10 +128,10 @@ The _fastq_ outputs of this call will be written to `viral_reads_1.fq.gz` and `v
 
 ### Obtaining reference sequences
 
-First, a reference database is obtained from Ensemble and NCBI Refseq in fasta format that contains the human reference sequences `Homo_sapiens` (i.e., the assembled chromosomes and unplaced sequences), all known viral refseq sequences `Viruses` (i.e., complete genomes), as well as known contaminants from the UniVec database `UniVec`. We store all fasta records into a common fasta file named `my_reference_db.fa`.
+First, a reference database is obtained from Ensemble and NCBI Refseq in fasta format that contains the human reference sequences `Homo_sapiens` (i.e., the assembled chromosomes and unplaced sequences) as well as all known viral refseq sequences `Viruses` (i.e., complete genomes). We store all fasta records into a common fasta file named `my_reference_db.fa`.
 
 ```shell
-$ vref fasta -r Homo_sapiens -r Viruses -r UniVec -o my_genome_db.fa
+$ vref fasta -r Homo_sapiens -r Viruses -o my_genome_db.fa
 ```
 
 If you encounter problems, try adding the `--debug` flag. By the way, _Virana_ supports more reference other options for references are `rRNA` (from [Silva](http://www.arb-silva.de)), `Fungi`, `Plasmids`, `Protozoa`, `Homo_sapiens_cDNA`, and `Bacteria`. Please note that the reference database of all known bacterial genomes consumes several gigabytes of storage (about 20) and that some short read mappers may have problems with that large indexes. In addition, while  _Virana_ supports analyses on cellular organisms, it is really optimized towards viruses.
@@ -148,10 +148,10 @@ By the way, _virana_ also supports downloading blast reference databases; see `$
 
 Next, we would like to combine the genomic reference database into an optimized index usable by a short read mapper. _Virana_ `vmap` currently supports two short read mappers: the transcriptomic mapper [STAR](http://code.google.com/p/rna-star) and the genomic mapper [BWA-mem](http://bio-bwa.sourceforge.net). [SMALT](www.sanger.ac.uk/resources/software/smalt), third short read mapper optimized towards highly polymorphic genomes (or erroneous reads) is implemented and accessible in _virana_ but not fully supported. Please [let us know](#contact) if you would like to see SMALT supported.
 
-In this tutorial, we assume that the short reads generated in the simulation step really originated from an RNA-Seq experiment, so we employ `vmap rnaindex` which internally calls the STAR indexer. We store the STAR index in a folder `my_index_dir` and use `16` compute threads. Please note that the index can become quite large, about 30 GB. If you encounter problems, try the `--debug` flag.
+In this tutorial, we assume that the short reads generated in the simulation step really originated from an RNA-Seq experiment, so we employ `vmap rnaindex` which internally calls the STAR indexer. We store the STAR index in a folder `my_index_dir` and use `16` compute threads. The option `--sparse` constructs a smaller but slower index; you may leave this parameter out if you have enough storage and RAM to hold a ~30GB index in memory. The advantage of a non-sparse index are higher mapping speeds (50M reads/hour/core). Please note that the index can become quite large, about 30 GB. If you encounter problems, try the `--debug` flag.
 
 ```shell
-$ vmap rnaindex -r my_genome_db.fa -i my_rna_index_dir --threads 16
+$ vmap rnaindex -r my_genome_db.fa -i my_rna_index_dir --threads 16 --sparse
 ```
 
 Alternatively or additionally, of course, a BWA-mem index can be generated; see `$ vmap dnaindex -h` for details. If you run the tutorial with the dna or the rna pipeline makes little difference; for real experimental data, this choice should be made based on the sequencing library.
@@ -160,6 +160,7 @@ Alternatively or additionally, of course, a BWA-mem index can be generated; see 
 ### Mapping short reads
 
 Next, we map the simulated metagenomic short read RNA-Seq data against the reference index. As an output, we obtain  a standard (unsorted) `bam` file, a summary statistics `taxonomy.txt` that contains tabular information about the taxa in the reference database that received alignments, as well as a special _hit_ file `hits.bz2` that  captures homology relationships between multi-mapping reads.  We store a `--sample_id` within the _hits_ file in order to be able to pool samples later on. We run a particulare `--sensitive` mapping with several compute `--threads`. Note that the `--reads` argument is given twice; the order matters due to the paired end nature of the read data. If we had only single-end data, one `--read` argument would have sufficed. Input reads are `--zipped`. In this example, we restrict our _hit_ output to reads that are alignable to `Viruses`, do not include low-complexity sequence reads (`--filter_complexity`) and have sufficient matches to the references (`--min_continiously_matching` and `--max_relative_mismatches`). Note that these filters only apply to the _hit_ file - the taxonomy and the `bam` file report all alignments. Again, if you encounter problems, try adding the `--debug` flag.
+Optionally, you could also add a `--splice_junctions` parameter that requires a proper splice junction annotation file for the human genome in gtf format in order to increase sensitivity of detected splice junctions during mapping. Please email the authors if you need such a file.
 
 ```shell
 $ vmap rnamap --index_dir my_rna_index_dir \
