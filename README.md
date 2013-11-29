@@ -22,14 +22,13 @@ _The (metagenomic) virus analysis toolkit_
 
 Virana, _the virus analysis toolkit_, is a Python-based software toolkit for analyzing metatranscriptomic (and, to a degree, metagenomic) sequence data in a context of clinical metagenomics in order to:
 
-- identify microbial nucleotide sequences in transcriptomic and genomic short read data with very high computational performance of 100M reads/hour.
+- identify microbial nucleotide sequences in transcriptomic and genomic short read data with very high computational performance of 50M reads/hour/core (for RNA-Seq data).
 - identify microbial transcripts diverged from known references at high sensitivity even at 10% nucleotide divergence or more (yes, that is a lot for short read mappers)
 - assemble identified microbial genomes and transcripts based on known references and put them in a context of homologous human factors (splice variants, genomic loci)
-- thus identify nucleotide sequences with very low abundances by pooling reads across multiple samples and using reference-based assembly of syntenic regions
-- identify nucleotide sequences homologous to human factors
+- identify nucleotide sequences with very low abundances by pooling reads across multiple samples and using reference-based assembly of syntenic regions
 - produce concise visualizations of all homologous contexts as well as an array of other output options that facilitate in-depth analysis of putative microbial signatures.
 
-Despite its name, _Virana_ does work not only for viruses (although it's there where it can use its advantages the most) but also other microbial organisms such as bacteria, fungi, and protists.
+Despite its name, _Virana_ does work not only for viruses (although it's there where it can use its advantages to the fullest) but also for other microbial organisms such as bacteria, fungi, and protists. _Virana_ can also applied to search for viral nucleotides in model organisms other than human or in sequence data of organisms for which no sequence assembly exists; however, _Virana_ is best used for organisms with a good reference as well as with known splice site annotations and known cDNA sequences; only in this case many of the unique features (i.e., the analysis of multimapping reads) can be used to full extent.
 
 A [recent analysis](#manuscript) of human tumor transcriptomes displays the ability of Virana to detect diverged viral nucleotide sequences and human-viral homologs with high sensitivity.
 
@@ -128,10 +127,10 @@ The _fastq_ outputs of this call will be written to `viral_reads_1.fq.gz` and `v
 
 ### Obtaining reference sequences
 
-First, a reference database is obtained from Ensemble and NCBI Refseq in fasta format that contains the human reference sequences `Homo_sapiens` (i.e., the assembled chromosomes and unplaced sequences), all known viral refseq sequences `Viruses` (i.e., complete genomes), as well as known contaminants from the UniVec database `UniVec`. We store all fasta records into a common fasta file named `my_reference_db.fa`.
+First, a reference database is obtained from Ensemble and NCBI Refseq in fasta format that contains the human reference sequences `Homo_sapiens` (i.e., the assembled chromosomes and unplaced sequences) as well as all known viral refseq sequences `Viruses` (i.e., complete genomes). We store all fasta records into a common fasta file named `my_reference_db.fa`.
 
 ```shell
-$ vref fasta -r Homo_sapiens -r Viruses -r UniVec -o my_genome_db.fa
+$ vref fasta -r Homo_sapiens -r Viruses -o my_genome_db.fa
 ```
 
 If you encounter problems, try adding the `--debug` flag. By the way, _Virana_ supports more reference other options for references are `rRNA` (from [Silva](http://www.arb-silva.de)), `Fungi`, `Plasmids`, `Protozoa`, `Homo_sapiens_cDNA`, and `Bacteria`. Please note that the reference database of all known bacterial genomes consumes several gigabytes of storage (about 20) and that some short read mappers may have problems with that large indexes. In addition, while  _Virana_ supports analyses on cellular organisms, it is really optimized towards viruses.
@@ -148,10 +147,10 @@ By the way, _virana_ also supports downloading blast reference databases; see `$
 
 Next, we would like to combine the genomic reference database into an optimized index usable by a short read mapper. _Virana_ `vmap` currently supports two short read mappers: the transcriptomic mapper [STAR](http://code.google.com/p/rna-star) and the genomic mapper [BWA-mem](http://bio-bwa.sourceforge.net). [SMALT](www.sanger.ac.uk/resources/software/smalt), third short read mapper optimized towards highly polymorphic genomes (or erroneous reads) is implemented and accessible in _virana_ but not fully supported. Please [let us know](#contact) if you would like to see SMALT supported.
 
-In this tutorial, we assume that the short reads generated in the simulation step really originated from an RNA-Seq experiment, so we employ `vmap rnaindex` which internally calls the STAR indexer. We store the STAR index in a folder `my_index_dir` and use `16` compute threads. Please note that the index can become quite large, about 30 GB. If you encounter problems, try the `--debug` flag.
+In this tutorial, we assume that the short reads generated in the simulation step really originated from an RNA-Seq experiment, so we employ `vmap rnaindex` which internally calls the STAR indexer. We store the STAR index in a folder `my_index_dir` and use `16` compute threads. The option `--sparse` constructs a smaller but slower index; you may leave this parameter out if you have enough storage and RAM to hold a ~30GB index in memory. The advantage of a non-sparse index are higher mapping speeds (50M reads/hour/core). Please note that the index can become quite large, about 30 GB. If you encounter problems, try the `--debug` flag.
 
 ```shell
-$ vmap rnaindex -r my_genome_db.fa -i my_rna_index_dir --threads 16
+$ vmap rnaindex -r my_genome_db.fa -i my_rna_index_dir --threads 16 --sparse
 ```
 
 Alternatively or additionally, of course, a BWA-mem index can be generated; see `$ vmap dnaindex -h` for details. If you run the tutorial with the dna or the rna pipeline makes little difference; for real experimental data, this choice should be made based on the sequencing library.
@@ -160,6 +159,7 @@ Alternatively or additionally, of course, a BWA-mem index can be generated; see 
 ### Mapping short reads
 
 Next, we map the simulated metagenomic short read RNA-Seq data against the reference index. As an output, we obtain  a standard (unsorted) `bam` file, a summary statistics `taxonomy.txt` that contains tabular information about the taxa in the reference database that received alignments, as well as a special _hit_ file `hits.bz2` that  captures homology relationships between multi-mapping reads.  We store a `--sample_id` within the _hits_ file in order to be able to pool samples later on. We run a particulare `--sensitive` mapping with several compute `--threads`. Note that the `--reads` argument is given twice; the order matters due to the paired end nature of the read data. If we had only single-end data, one `--read` argument would have sufficed. Input reads are `--zipped`. In this example, we restrict our _hit_ output to reads that are alignable to `Viruses`, do not include low-complexity sequence reads (`--filter_complexity`) and have sufficient matches to the references (`--min_continiously_matching` and `--max_relative_mismatches`). Note that these filters only apply to the _hit_ file - the taxonomy and the `bam` file report all alignments. Again, if you encounter problems, try adding the `--debug` flag.
+Optionally, you could also add a `--splice_junctions` parameter that requires a proper splice junction annotation file for the human genome in gtf format in order to increase sensitivity of detected splice junctions during mapping. Please email the authors if you need such a file.
 
 ```shell
 $ vmap rnamap --index_dir my_rna_index_dir \
@@ -207,7 +207,7 @@ We geenrally recommend using the parameters shown in the tutorial for searching 
 However, several parameters of `vhom` have effects on the results that perhaps are not immediately clear to the user. `--references`, for example, determines which nucleotide reference are used to construct the homologous context of putative microbial reads. While use of arbitrary genomic references makes sense for genomic reads, the use of host genomic references for RNA-Seq data may lead to split regions (due to splicing or the lack thereof in genomic data) and consequently lower interpretability of the data. Therefore, construction of a purely microbial `--references` set for the use of `vhom` can make sense in these cases (host references should still be used in `vmap` in order to allow the proper use of `--cdna` in `vhom`). Next, several `--virana_hits` can be pooled in `vhom` by specifying the parameter multiple times. This will pool these data for analysis while still retaining identities of the pooled data (by using the `--sample_id` provided in `vmap`). As a consequence, the filter `--min_read_number` may be affected since this filter applies on the pooled data in order to exclude spurious homologous regions that attracted only very few reads attributable to biological background noise.  Increasing this filter may thus make sense with many pooled data or high sequencing depths. Similarly, `--min_region_length` discards very short regions that may also be attributable to noise (or a very interesting miRNA, who knows...) The `--max_gap_length` controls how long gaps within homologous regions that are not covered by any reads are allowed to be; while larger values facilitate merging of regions and thus often increase interpretability, too high values encourage artifical chimeras. The `--word_length` specifies how sensitive the matching of reads and references in the homologous region construction is. Lower values result in increases in spurious matches (decrease in specificity at low gains of sensitivity) while higher values increase processing speed at cost of sensitivity. Still, higher values may make sense if you have large data sets to process. Last, have a look at the command-line references by calling `$ vmap regions -h`; especially the use of `--region_stats` and the Jalview-based visualizations can aid in analyzing large number of samples.
 
 
-### References
+### Manuscript
 <a id="manuscript"></a>
 
 Virana has been developed for and validated in the following [publication](http://www.ploscompbiol.org/article/info:doi/10.1371/journal.pcbi.1003228):
