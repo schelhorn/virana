@@ -77,7 +77,7 @@ $ cd virana
 $ python setup.py install
 ```
 
-then installs the python distribution into the usual location and makes four command line executables (really just wrappers around python scripts) called `vsim`, `vref`, `vmap`, and `vhom` available in your `$PATH`. See the [tutorial]((#tutorial)) for information on how to proceed from there.
+then installs the python distribution into the usual location and makes four command line executables (really just wrappers around python scripts) called `vsim`, `vref`, `vmap`, `vhom` and `vplot` available in your `$PATH`. See the [tutorial]((#tutorial)) for information on how to proceed from there.
 
 Installation of the Galaxy version happens via the Galaxy toolshed; also, you have to be an admin in your Galaxy installation. See the galaxy project [documentation](http://wiki.galaxyproject.org/InstallingRepositoriesToGalaxy) for how to install toolshed repos in general. The _virana_ toolshed repository is located [here](http://testtoolshed.g2.bx.psu.edu/view/mzeidler/virana_main) and can also be found from within your own galaxy installation by searching for the term _virana_ in the public toolshed. For the advances users, a [branch](https://github.com/schelhorn/virana/tree/galaxy_tools) of the aforementioned _virana_ github repository also contains the Galaxy tools. If you are an advanced Galaxy user, you know what to do.
 
@@ -92,23 +92,24 @@ biopython>=1.61
 pysam
 ftputil>=2.4
 HTSeq
+matplotlib
 ```
 
 The binaries are used by the four _virana_ executables are [STAR](https://code.google.com/p/rna-star/) version [2.3.1](ftp://ftp2.cshl.edu/gingeraslab/tracks/STARrelease/Alpha/) or higher, [BWA-mem](http://bio-bwa.sourceforge.net/), [LASTZ](http://www.bx.psu.edu/~rsharris/lastz/), and [Jalview](http://www.jalview.org/‎). For the latter, only the Java packages `jalview.jar` is required; the other binaries are commonly called `STAR`, `bwa`, and `lastz` in case you want them to `locate` on your GNU-Linux system. Another short read mapper, [SMALT](http://www.sanger.ac.uk/resources/software/smalt/‎), is currently not fully supported but may be added in the future. All these binaries should be installed (see documentation for each of these binaries, they usually only require `./configure` and `make`) and [placed](http://www.linfo.org/path_env_var.html) into the `$PATH` by you or your administrator. If placing them into the `$PATH` is not convenient, however, each _virana_ component also allows specifying the lcoation of the binaries via command line parameters (see the [tutorial](#tutorial)).
 
-In addition, the Galaxy tool wrapping _virana_ also requires the Python package `matplotlib`, but that should be provided with Galaxy anyway.
 
 ## Tutorial
 <a id="tutorial"></a>
 
 ### Components
 
-As indicated before, _virana_ consists of four components:
+As indicated before, _virana_ consists of five components:
 
 1.  _Virana simulator_, `vsim`, a very simple (or even naive) metagenomic short read simulator that is convenient to use for microbial genomes
 2.  _Virana reference_, `vref`, a tool that automatically obtains viral, human, fungi, and bacterial references sequences as well as their taxonomic annotation from reference archives
 3.  _Virana mapper_, `vmap`, a tool that employs highly sensitive and fast short read mappers to align transcriptomic or genomic reads to annotated references and supports a variety of output formats
 4.  _Virana homology_,`vhom`, a tool that analyzes the homology relationships within mapped reads in order to extract _homologous regions_, i.e. nucleotide stretches that display high sequence similarity to a pathogen and, optionally, also to human factors
+5. _Virana plot_, `vplot`, a tool that generates plots visualizing statistics of determined _homologous regions_.
 
 ### Simulating reads
 
@@ -166,7 +167,7 @@ $ vmap rnamap --index_dir my_rna_index_dir \
   --reads=viral_reads_1.fq.gz --reads=viral_reads_2.fq.gz --zipped \
   --taxonomy=taxonomy.txt --bam=mapping.bam --virana_hits=hits.bz2 \
   --virana_hit_filter=Viruses --sample_id=sample_1 --threads=8 --sensitive \
-  --min_continiously_matching=25 --max_relative_mismatches=0.2 --filter_complexity
+  --min_continiously_matching=25 --max_relative_mismatches=0.2
 ```
 
 Here, we left out human `--splice_junctions` that may be relevant if your input reads contain human transcripts. Note that the `bam` file can be directly used within other analysis pipelines; you may want to `$ samtools sort` it, though since it is currently sorted by input read order. We may also mention additional outputs; for example, providing  `--unmapped_end_1` and `--unmapped_end_2` allow for outputting unmapped reads as fastq files, and `--chimeric_mappings` activates output of chimerically mapping reads in SAM format. See `$ vmap rnamap -h` for a list of other options.  If you have chosen to go with a genomic mapping instead of a transcriptomic mapping, `$ vmap dnamap -h` is your friend.
@@ -187,6 +188,25 @@ Again, there are more options, especially regarding paths to binaries used by `v
 ### Analysis of homologous regions
 
  Since we restricted the _hit_ file to Viruses in the previous step, viral taxonomic families it is. Within the output directory `viral_families`, subdirectories are generated for each viral taxonomic family that the reads you specified earlier map to. Each family directory, in turn, contains a number of homologous regions that are represented by aligned, multi-fasta consensus sequences and visualizations of these consensus sequences using `jalview`.
+
+ In our case two families are detected, Herpesviridae and Retroviridae with 9 and 2 regions, respectively. The following image shows the visualization for the ninth homologous region of the Herpesviridae family. 
+
+![region_9_consensus.jpg](images/region_9_consensus.jpg)
+
+ Also the above mentioned information about the homologous regions contained in the statistic file can be visualized by using `vplot`. 
+
+ ```shell
+$ vplot plot --output_file=plot.pdf --stats=my_families/stats.txt
+```
+In our case this will generate the following two plots. Where the first plot shows the cumulative reads assigned to each family and the second plot shows the cumulative basepaires assigned to each family.  
+
+![plot.pdf](images/plot.jpg)
+
+![plot.pdf](images/plot2.jpg)
+
+
+
+
 
 
 ## Appendix
