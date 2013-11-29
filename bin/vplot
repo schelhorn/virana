@@ -1,0 +1,5 @@
+#!/usr/bin/env python
+
+import virana.vplot
+
+virana.vplot.CLI.run()
