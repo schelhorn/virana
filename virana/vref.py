@@ -13,6 +13,7 @@ import gzip
 import string
 import os
 import tarfile
+import re
 
 from io import BytesIO
 from collections import defaultdict
@@ -62,15 +63,15 @@ class DataDownloader(object):
     @classmethod
     def _get_fasta_record(self, record, group, family, organism, identifier, sub_identifier=None, description=''):
 
-        record.seq._data = record.seq._data.translate(NUC_TRANS)
+        record.seq._data = str(record.seq._data).translate(NUC_TRANS)
 
-        group       = group.translate(None, NON_ID)
-        family      = family.translate(None, NON_ID)
-        organism    = organism.translate(None, NON_ID)
-        identifier  = identifier.translate(None, NON_ID)
+        group       = re.sub('[^A-Za-z0-9_]+', '', group)
+        family      = re.sub('[^A-Za-z0-9_]+', '', family)
+        organism    = re.sub('[^A-Za-z0-9_]+', '', organism)
+        identifier  = re.sub('[^A-Za-z0-9_]+', '', identifier)
 
         if sub_identifier:
-            sub_identifier = sub_identifier.translate(None, NON_ID)
+            sub_identifier = re.sub('[^A-Za-z0-9_]+', '', sub_identifier)
             record.id  = ';'.join([group, family, organism, identifier, sub_identifier])
         else:
             record.id           = ';'.join([group, family, organism, identifier])
@@ -102,7 +103,7 @@ class SilvaDownloader(DataDownloader):
         remote_path = self.base_path + 'SSURef_%s_NR_tax_silva_trunc.fasta.tgz' % self.silva_release
         if self.host.path.isfile(remote_path):
 
-            with self.host.file(remote_path, 'rb') as remote_handle:
+            with self.host.open(remote_path, 'rb') as remote_handle:
                 remote_content = BytesIO(remote_handle.read())
 
                 with tarfile.open(fileobj=remote_content) as tar:
@@ -160,7 +161,7 @@ class HumanTranscriptDownloader(DataDownloader):
                 if entry.startswith('Homo_sapiens.') and entry.endswith('.gtf.gz'):
                     logging.debug('Processing cDNA annotations %s' % entry)
 
-                    with self.host.file(self.gtf_path + '/' + entry, 'rb') as zipped_handle:
+                    with self.host.open(self.gtf_path + '/' + entry, 'rb') as zipped_handle:
                         remote_content = BytesIO(zipped_handle.read())
 
                         gzipfile = gzip.GzipFile(fileobj=remote_content)
@@ -190,7 +191,7 @@ class HumanTranscriptDownloader(DataDownloader):
 
                         logging.debug('Processing human transcript file %s' % entry)
 
-                        with self.host.file(subpath + '/' + entry, 'rb') as zipped_handle:
+                        with self.host.open(subpath + '/' + entry, 'rb') as zipped_handle:
                             remote_content = BytesIO(zipped_handle.read())
 
                             gzipfile = gzip.GzipFile(fileobj=remote_content)
@@ -322,21 +323,25 @@ class RefSeqDownloader(DataDownloader):
     @classmethod
     def _parse_genbank_records(self, file_handle):
 
-        for gb_record in SeqIO.parse(file_handle, 'genbank'):
 
-            project = self._get_project_from_genbank(gb_record)
-            organism, accession, gi, taxonomy, family =\
-                self._get_annotations_from_genbank(gb_record)
-            record = self._get_record_from_genbank(gb_record)
+        try:
+            for gb_record in SeqIO.parse(file_handle, 'genbank'):
 
-            if len(record) > 0:
-                yield record, project, taxonomy, family, organism, gi
+                project = self._get_project_from_genbank(gb_record)
+                organism, accession, gi, taxonomy, family =\
+                    self._get_annotations_from_genbank(gb_record)
+                record = self._get_record_from_genbank(gb_record)
+
+                if len(record) > 0:
+                    yield record, project, taxonomy, family, organism, gi
+        except ValueError:
+            logging.debug('Error parsing genbank record, skipping')
 
     def _get_nc(self, entry_path):
 
         if self.host.path.isfile(entry_path):
             logging.debug('Processing refseq entry %s' % entry_path)
-            with self.host.file(entry_path) as remote_handle:
+            with self.host.open(entry_path) as remote_handle:
 
                 for record, project, taxonomy, family, organism, gi\
                     in self._parse_genbank_records(remote_handle):
@@ -350,7 +355,7 @@ class RefSeqDownloader(DataDownloader):
         scaffold_path = entry_path.replace('.gbk', '.scaffold.gbk.tgz')
         if self.host.path.isfile(scaffold_path):
             logging.debug('Processing refseq entry %s' % scaffold_path)
-            remote_handle = self.host.file(scaffold_path, 'rb')
+            remote_handle = self.host.open(scaffold_path, 'rb')
             remote_content = BytesIO(remote_handle.read())
             tar = tarfile.open(fileobj=remote_content)
             for subentry in tar.getnames():
@@ -423,7 +428,7 @@ class HumanGenomeDownloader(DataDownloader):
 
                     logging.debug('Processing human entry %s' % entry)
 
-                    with self.host.file(self.host.getcwd() + '/' + entry, 'rb') as zipped_handle:
+                    with self.host.open(self.host.getcwd() + '/' + entry, 'rb') as zipped_handle:
                         remote_content = BytesIO(zipped_handle.read())
 
                         gzipfile = gzip.GzipFile(fileobj=remote_content)
@@ -453,7 +458,7 @@ class UniVecDownloader(DataDownloader):
 
         logging.debug('Processing Univec entries')
 
-        with self.host.file(self.host.getcwd() + '/' + 'UniVec') as remote_handle:
+        with self.host.open(self.host.getcwd() + '/' + 'UniVec') as remote_handle:
             for record in SeqIO.parse(remote_handle, "fasta"):
                 organism    = '_'.join(record.description.split(' ')[1:])
                 family      = 'Unassigned'
