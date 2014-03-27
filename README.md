@@ -5,6 +5,8 @@ _The (metagenomic) virus analysis toolkit_
 </style>
 
 
+
+
 ### Table of Contents  
 
 [Introduction](#introduction)
@@ -18,11 +20,13 @@ _The (metagenomic) virus analysis toolkit_
 ## Introduction
 <a id="introduction"></a>
 
+News: in the current version 1.2 of _Virana_ we fixed several smaller bugs such as a recent incompatibility with `FTPutil` 3.0 and introduced a new algorithmical backend (clustered interval trees) for `vhom` using `bx-python`. As a result, `vhom` is now two to three orders of magnitude faster on WGS data. Thanks for everyone who reported bugs and please send any more such findings to [sven@mpi-inf.mpg.de](mailto:sven@mpi-inf.mpg.de).
+
 ### Summary
 
 Virana, _the virus analysis toolkit_, is a Python-based software toolkit for analyzing metatranscriptomic (and, to a degree, metagenomic) sequence data in a context of clinical metagenomics in order to:
 
-- identify microbial nucleotide sequences in transcriptomic and genomic short read data with very high computational performance of 50M reads/hour/core (for RNA-Seq data).
+- identify microbial nucleotide sequences in transcriptomic and genomic short read data with very high computational performance of 50M reads/hour/core (for RNA-Seq data and against all viral references, a little slower if mapping against all human, viral, and bacterial references and using WGS-data.).
 - identify microbial transcripts diverged from known references at high sensitivity even at 10% nucleotide divergence or more (yes, that is a lot for short read mappers)
 - assemble identified microbial genomes and transcripts based on known references and put them in a context of homologous human factors (splice variants, genomic loci)
 - identify nucleotide sequences with very low abundances by pooling reads across multiple samples and using reference-based assembly of syntenic regions
@@ -93,9 +97,10 @@ pysam
 ftputil>=2.4
 HTSeq
 matplotlib
+bx-python
 ```
 
-The binaries are used by the four _virana_ executables are [STAR](https://code.google.com/p/rna-star/) version [2.3.1](ftp://ftp2.cshl.edu/gingeraslab/tracks/STARrelease/Alpha/) or higher, [BWA-mem](http://bio-bwa.sourceforge.net/), [LASTZ](http://www.bx.psu.edu/~rsharris/lastz/), and [Jalview](http://www.jalview.org/‎). For the latter, only the Java packages `jalview.jar` is required; the other binaries are commonly called `STAR`, `bwa`, and `lastz` in case you want them to `locate` on your GNU-Linux system. Another short read mapper, [SMALT](http://www.sanger.ac.uk/resources/software/smalt/‎), is currently not fully supported but may be added in the future. All these binaries should be installed (see documentation for each of these binaries, they usually only require `./configure` and `make`) and [placed](http://www.linfo.org/path_env_var.html) into the `$PATH` by you or your administrator. If placing them into the `$PATH` is not convenient, however, each _virana_ component also allows specifying the lcoation of the binaries via command line parameters (see the [tutorial](#tutorial)).
+The binaries are used by the four _virana_ executables are [STAR](https://code.google.com/p/rna-star/) version [2.3.1](ftp://ftp2.cshl.edu/gingeraslab/tracks/STARrelease/Alpha/) or higher, [BWA-mem](http://bio-bwa.sourceforge.net/), [LASTZ](http://www.bx.psu.edu/~rsharris/lastz/), [RazerS3](http://www.seqan.de/projects/razers/), and [Jalview](http://www.jalview.org/‎). For the latter, only the Java packages `jalview.jar` is required; the other binaries are commonly called `STAR`, `bwa`, and `lastz` in case you want them to `locate` on your GNU-Linux system. Another short read mapper, [SMALT](http://www.sanger.ac.uk/resources/software/smalt/‎), is currently not fully supported but may be added in the future. For mapping, either `STAR` or `BWA-mem` are required, but not both. Similaraly, for constructino of homologous regions, either `razers3` or `lastz` are required, but not both. All these binaries should be installed (see documentation for each of these binaries, they usually only require `./configure` and `make`) and [placed](http://www.linfo.org/path_env_var.html) into the `$PATH` by you or your administrator. If placing them into the `$PATH` is not convenient, however, each _virana_ component also allows specifying the lcoation of the binaries via command line parameters (see the [tutorial](#tutorial)).
 
 
 ## Tutorial
@@ -109,7 +114,7 @@ As indicated before, _virana_ consists of five components:
 2.  _Virana reference_, `vref`, a tool that automatically obtains viral, human, fungi, and bacterial references sequences as well as their taxonomic annotation from reference archives
 3.  _Virana mapper_, `vmap`, a tool that employs highly sensitive and fast short read mappers to align transcriptomic or genomic reads to annotated references and supports a variety of output formats
 4.  _Virana homology_,`vhom`, a tool that analyzes the homology relationships within mapped reads in order to extract _homologous regions_, i.e. nucleotide stretches that display high sequence similarity to a pathogen and, optionally, also to human factors
-5. _Virana plot_, `vplot`, a tool that generates plots visualizing statistics of determined _homologous regions_.
+5. _Virana plot_, `vplot`, a tool that generates plots visualizing statistics of determined _homologous regions_. This component is not featured in the tutorial.
 
 ### Simulating reads
 
@@ -159,54 +164,59 @@ Alternatively or additionally, of course, a BWA-mem index can be generated; see 
 
 ### Mapping short reads
 
-Next, we map the simulated metagenomic short read RNA-Seq data against the reference index. As an output, we obtain  a standard (unsorted) `bam` file, a summary statistics `taxonomy.txt` that contains tabular information about the taxa in the reference database that received alignments, as well as a special _hit_ file `hits.bz2` that  captures homology relationships between multi-mapping reads.  We store a `--sample_id` within the _hits_ file in order to be able to pool samples later on. We run a particulare `--sensitive` mapping with several compute `--threads`. Note that the `--reads` argument is given twice; the order matters due to the paired end nature of the read data. If we had only single-end data, one `--read` argument would have sufficed. Input reads are `--zipped`. In this example, we restrict our _hit_ output to reads that are alignable to `Viruses` and have sufficient matches to the references (`--min_continiously_matching` and `--max_relative_mismatches`). Note that these filters only apply to the _hit_ file - the taxonomy and the `bam` file report all alignments. Again, if you encounter problems, try adding the `--debug` flag.
+Next, we map the simulated metagenomic short read RNA-Seq data against the reference index. As an output, we obtain  a standard (unsorted) `bam` file, a summary statistics `taxonomy.txt` that contains tabular information about the taxa in the reference database that received alignments, as well as a special _hit_ file `hits.bz2` that  captures homology relationships between multi-mapping reads.  We store a `--sample_id` within the _hits_ file in order to be able to pool samples later on. 
+
+Mapping for RNA-Seq data is done by `star`, a particularly fast and feature-rich mapper. The path to the star binary (which often is called `STAR`) is specified by `--star-path`. If the bianrg is in your `$PATH`, you may ommit this option. Similarly, the path to the `samtools` binary os specified.
+
+We run a particulare `--sensitive` mapping with several compute `--threads`. Note that the `--reads` argument is given twice; the order matters due to the paired end nature of the read data. If we had only single-end data, one `--read` argument would have sufficed. Input reads are `--zipped` (alternatively, `--bzipped` for `*.bz2` compressed reads or `--fqz=[fqz_binary]` for `.fqz` compressed reads would allow us using these compression schemes). In this particular example, we restrict our _hit_ output to reads that are alignable to `Viruses` and have sufficient matches to the references (`--min_continiously_matching` and `--max_relative_mismatches`). Note that these filters only apply to the _hit_ file - the taxonomy and the `bam` file report all alignments. If you would like to allow multiple kinds of pathogens, just specify the `--virana_hit_filter` multiple times (such as once again for `Bacteria`. Again, if you encounter problems, try adding the `--debug` flag to see what's going on.
+
 Optionally, you could also add a `--splice_junctions` parameter that requires a proper splice junction annotation file for the human genome in gtf format in order to increase sensitivity of detected splice junctions during mapping. Please email the authors if you need such a file.
 
 ```shell
 $ vmap rnamap --index_dir my_rna_index_dir \
-  --reads=viral_reads_1.fq.gz --reads=viral_reads_2.fq.gz --zipped \
-  --taxonomy=taxonomy.txt --bam=mapping.bam --virana_hits=hits.bz2 \
-  --virana_hit_filter=Viruses --sample_id=sample_1 --threads=8 --sensitive \
-  --min_continiously_matching=25 --max_relative_mismatches=0.2
+  --reads=viral_reads_1.fq.gz \
+  --reads=viral_reads_2.fq.gz \
+  --zipped \
+  --star-path='STAR' \
+  --samtools_path='samtools' \
+  --taxonomy=taxonomy.txt \
+  --bam=mapping.bam \
+  --threads=8 \
+  --sensitive \
+  --virana_hits=hits.bz2 \
+  --virana_hit_filter=Viruses \
+  --sample_id=sample_1 \
+  --min_continiously_matching=25 \
+  --max_relative_mismatches=0.2
 ```
 
-Here, we left out human `--splice_junctions` that may be relevant if your input reads contain human transcripts. Note that the `bam` file can be directly used within other analysis pipelines; you may want to `$ samtools sort` it, though since it is currently sorted by input read order. We may also mention additional outputs; for example, providing  `--unmapped_end_1` and `--unmapped_end_2` allow for outputting unmapped reads as fastq files, and `--chimeric_mappings` activates output of chimerically mapping reads in SAM format. See `$ vmap rnamap -h` for a list of other options.  If you have chosen to go with a genomic mapping instead of a transcriptomic mapping, `$ vmap dnamap -h` is your friend.
+Here, we left out human `--splice_junctions` that may be relevant if your input reads contain human transcripts. Note that the `bam` file can be directly used within other analysis pipelines; you may want to `$ samtools sort` it, though since it is currently sorted by input read order. We may also mention additional outputs; for example, providing  `--unmapped_end_1` and `--unmapped_end_2` allow for outputting unmapped reads as fastq files, and `--chimeric_mappings` activates output of chimerically mapping reads in SAM format. See `$ vmap rnamap -h` for a list of other options.  
+
+If you have chosen to go with a genomic mapping instead of a transcriptomic mapping, `$ vmap dnamap -h` is your friend. In this case most options stay the same, but the mapper is not `star` but `bwa-mem` and the path to the mapper binary specified via the `--bwa-path` option (again, ommit if in `$PATH`). For DNA data, additional input formats are available: for interleaved input read data you may use a single read file if specifying `--interleaved`; similarly, `--bam_input` allows you to use BAM alignments from a single BAM file. Note, however, that reads in the bam are used in the order they are stored in the file - this may cause problems if the BAM contains mapped and coordinate-sorted data as `bwa-mem` will then estimate the insert size distribution based on reads mapped to telomer ends of the chromosome).
 
 ### Extraction of homologous relationships
 
-Last, the _hit_ file generated in the previous step can be analyzed with regard to the homologous (i.e., transcriptomic and genomic) contexts of the reads therein. This greatly facilitates delineation of microbial from human sequence regions (i.e., syntenic sequence stretches consisting of assembled reads that align well to several references). This is enabled by the _virana_ homology module `vhom`, running on one or several _hit_ files (the `--virana_hits` argument can be supplied multiple times and the mappings therein will be pooled prior to analysis). In order to identify homologus relationships, genomic `--references` and transcriptomic `--cdna` fasta files as generated before are employed. The homologus regions generated will be restricted to contain a `--min_read_number` of aligned short reads, will have a certain `--max_gap_length` basepairs of gaps that are not covered by any sequence reads, and the whole region including gaps will be at least `--min_region_length` basepairs long. The alignment sensitivity of the sequences that controls the matching of short reads to references has to be high, so we specify a small `--word_length` of 7 (the default). We would like to see alignment plots of all homologous regions, so we specify a `--jalview_jar_dir` where the _jalview.jar_ file of the [Jalview](http://www.jalview.org) distribution is located on your system. `vhom` will generate a directory structure within the `--output_dir` where each subdirectory correponds to a taxonomic family (see next Section). Last, a tabular summary statistic `--region_stats` will be generated that contains high-level information about the homologous regions.
+Last, the _hit_ file generated in the previous step can be analyzed with regard to the homologous (i.e., transcriptomic and genomic) contexts of the reads therein. This greatly facilitates delineation of microbial from human sequence regions (i.e., syntenic sequence stretches consisting of assembled reads that align well to several references). This is enabled by the _virana_ homology module `vhom`, running on one or several _hit_ files (the `--virana_hits` argument can be supplied multiple times and the mappings therein will be pooled prior to analysis. Alternatively, a wildcard such as `--virana_hits=/path/to/*_hits.bz2` will also result in all matching files to be pooled for analysis). In order to identify homologus relationships, genomic `--references` and transcriptomic `--cdna` fasta files as generated before are employed. The homologus regions generated will be restricted to contain a `--min_read_number` of aligned short reads, will have a certain `--max_gap_length` basepairs of gaps that are not covered by any sequence reads, and the whole region including gaps will be at least `--min_region_length` basepairs long. The alignment of homologous regions is conducted either using `razers3` (very fast and very high sensitivity, recommended) or `lastz` (significantly slower on whole-genome sequencing data but even more sensitive). Specifying the path to one of these tools (by setting either `--razers3_path` or `--lastz_path`) selects one of these mappers. If choosing `lastz`, an additonal parameter `--word_length` is available that controls the sensitivity of the sequence alignment of short reads to references. Choosing `--word_length=7` gives a very sensitive result for the construction of homologous regions. In this aprticular example, we also would like to see alignment plots of all homologous regions, so we specify a `--jalview_jar_dir` where the _jalview.jar_ file of the [Jalview](http://www.jalview.org) distribution is located on your system. `vhom` will generate a directory structure within the `--output_dir` where each subdirectory correponds to a taxonomic family (see next Section). Last, a tabular summary statistic `--region_stats` will be generated that contains high-level information about the homologous regions.
 
 ```shell
-$ vhom regions --references=my_genome_db.fa --cdna=my_transcriptome_db.fa \
-  --virana_hits=hits.bz2 --min_read_number=5 --max_gap_length=50 \
-  --min_region_length=100 --word_length=7 --jalview_jar_dir=/usr/lib/jalview/
-  --output_dir=my_families --region_stats=my_families/stats.txt
+$ vhom regions \
+	--references=my_genome_db.fa \
+	--cdna=my_transcriptome_db.fa \
+  	--virana_hits=hits.bz2 \
+  	--min_read_number=5 \
+  	--max_gap_length=50 \
+  	--min_region_length=100 \
+  	--razers3_path='razers3' \
+  	--jalview_jar_dir=/usr/lib/jalview/
+  	--output_dir=my_families \
+  	--region_stats=my_families/stats.txt
 ```
 
 Again, there are more options, especially regarding paths to binaries used by `vhom`. `$ vhom regions -h` and adding the `--debug` flag may help.
 
 ### Analysis of homologous regions
 
- Since we restricted the _hit_ file to Viruses in the previous step, viral taxonomic families it is. Within the output directory `viral_families`, subdirectories are generated for each viral taxonomic family that the reads you specified earlier map to. Each family directory, in turn, contains a number of homologous regions that are represented by aligned, multi-fasta consensus sequences and visualizations of these consensus sequences using `jalview`.
-
- In our case two families are detected, Herpesviridae and Retroviridae with 9 and 2 regions, respectively. The following image shows the visualization for the ninth homologous region of the Herpesviridae family. 
-
-![region_9_consensus.jpg](images/region_9_consensus.jpg)
-
- Also the above mentioned information about the homologous regions contained in the statistic file can be visualized by using `vplot`. 
-
- ```shell
-$ vplot plot --output_file=plot.pdf --stats=my_families/stats.txt
-```
-In our case this will generate the following two plots. Where the first plot shows the cumulative reads assigned to each family and the second plot shows the cumulative basepaires assigned to each family.  
-
-![plot.pdf](images/plot.jpg)
-
-![plot.pdf](images/plot2.jpg)
-
-
-
-
+ Since we restricted the _hit_ file to Viruses in the previous step, viral taxonomic families it is. Within the output directory `viral_families`, subdirectories are generated for each viral taxonomic family that the reads you specified earlier map to. Each family directory, in turn, contains a number of homologous regions that are represented by aligned, multi-fasta consensus sequences and visualizations of these consensus sequences using `jalview`. Additionaly, plotting the contents of  the `--region_stats` by using `R` and `ggplot` allows for graphics as in the published [manuscript](#manuscript).
 
 
 ## Appendix
@@ -216,7 +226,9 @@ In our case this will generate the following two plots. Where the first plot sho
 
 _Virana's_ computational performance is mostly bound by the mapping step `vmap` and, to a lesser degree and only if the sample is rich in viral nucleotides, by the homologous region constructions undertaken by `vhom`. In contrast, `vsim` and `vref` are often only used one to generate test and reference data, respectively. 
 
-For `vmap`, the limiting factor preventing very high scalability is the Python-based, single-process filtering step of the alignments that is required to produce the _hit_ files. While modern short read mappers such as STAR are able to map on the order of 50M reads/hour/core with high scalability even in `--sensitive` mode, the python-based filtering currently can use only one core and tops out at about 100-150M reads/hour. Therefore, assigning more than about two cores to the short read mappers does not make computational sense if you want to produce _virana_ _hit_ files. Of course, if your main aim is to produce `--sam` files or `--bam` files, you can specify `vmap` to do just that and enjou practically unlimited scalability (16 cores and 0.8G reads/hour). Still, even with two cores one can analyze a typical human RNA-Seq sample in one hour or a WGS sample in about ten hours. In addition, nothing prevents you from running multiple samples in parallel (except perhaps memory demands - our use of STAR currently employs serparate memory allocations for each run. using shared memory is possible, but does not work on all systems. See STAR [manual](https://code.google.com/p/rna-star/) if you would like to know more). Noteably, however, there are additional parameters to `vmap` that may reduce performance: `--filter_complexity`, for example, reduces the speed of the Python component to about 65M reads/hour, and `--quality` may reduce these values even further. Parsing of the `SAM` output of the short read mappers is already maxed out by the [pysam](http://www.cgat.org/~andreas/documentation/pysam/contents.html) module using [fifos](http://stackoverflow.com/questions/8466926/using-python-subprocess-to-redirect-stdout-to-stdin) (at around 250M reads/hour in a single thread). Still, the Python based filtering could be further improved using [multiprocessing](http://docs.python.org/2.7/library/multiprocessing.html).
+For `vmap`, the limiting factor preventing very high scalability is the Python-based, single-process filtering step of the alignments that is required to produce the _hit_ files. While modern short read mappers such as RNA-STAR are able to map on the order of 50M reads/hour/core with high scalability even in `--sensitive` mode, the python-based filtering currently can use only one core and tops out at about 100-150M reads/hour. Therefore, assigning more than about two cores to the short read mappers does not make computational sense if you want to produce _virana_ _hit_ files using RNA-STAR. In contrast, genomic data can (and perhaps should) be mapped by _Virana_ using `bwa-mem` by configuring `vmap` approbriately. In this case, and if mapping is undertaken against all bacterial and viral references, less reads are mapped per core and hour (about 10 Mreads/hour), so specifying 8-16 cores for mapping may make sense in this case.
+
+ If your main aim is to produce `--sam` files or `--bam` files, you can specify `vmap` to do just that and enjoy practically unlimited scalability (16 cores and 0.8G reads/hour). Still, even with two cores one can analyze a typical human RNA-Seq sample in one hour or a WGS sample in about ten hours. In addition, nothing prevents you from running multiple samples in parallel (except perhaps memory demands - our use of STAR currently employs serparate memory allocations for each run. using shared memory is possible, but does not work on all systems. See STAR [manual](https://code.google.com/p/rna-star/) if you would like to know more). Noteably, however, there are additional parameters to `vmap` that may reduce performance: `--filter_complexity`, for example, reduces the speed of the Python component to about 65M reads/hour, and `--quality` may reduce these values even further. Parsing of the `SAM` output of the short read mappers is already maxed out by the [pysam](http://www.cgat.org/~andreas/documentation/pysam/contents.html) module using [fifos](http://stackoverflow.com/questions/8466926/using-python-subprocess-to-redirect-stdout-to-stdin) (at around 250M reads/hour in a single thread). Still, the Python based filtering could be further improved using [multiprocessing](http://docs.python.org/2.7/library/multiprocessing.html).
 
 The execution speed of `vhom` is usually on the order of minutes since only few (compared to the number of the whole read data) viral reads are expected to be of possible microbial origin. Also, it consumes very little RAM. Still, since `vhom` is single-threaded, future performance imporvements may be gained if Python-based multiprocessing would be introduced. Let us know if you would require this.
 
