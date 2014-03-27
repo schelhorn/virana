@@ -284,7 +284,7 @@ class SAMParser:
 
         logging.debug('Extracting header from pysam fifo...')
         self.header = self.samfile.header
-        logging.debug('Finished extracting header...')
+        logging.debug('Finished extracting header of length %i' % len(self.header))
 
     # def parse_htseq_lines(self, stream):
 
@@ -311,7 +311,11 @@ class SAMParser:
 
         getrname = self.samfile.getrname
 
-        for alignment in self.samfile:
+        logging.debug('Parsing SAM file alignments...')
+        for i, alignment in enumerate(self.samfile):
+
+            if i % 100000 == 0:
+                logging.debug('Processed %i SAM alignments' % i)
 
             read_name   = alignment.qname
             seq         = alignment.seq
@@ -319,13 +323,13 @@ class SAMParser:
             flag        = alignment.flag
             cigar       = None
 
-            is_paired = alignment.is_paired
-            is_mapped = not alignment.is_unmapped
-            is_mate_mapped = not alignment.mate_is_unmapped
-            is_reverse = alignment.is_reverse
-            is_end1 = alignment.is_read1
-            is_end2 = alignment.is_read2
-            is_primary = not alignment.is_secondary
+            is_paired           = alignment.is_paired
+            is_mapped           = not alignment.is_unmapped
+            is_mate_mapped      = not alignment.mate_is_unmapped
+            is_reverse          = alignment.is_reverse
+            is_end1             = alignment.is_read1
+            is_end2             = alignment.is_read2
+            is_primary          = not alignment.is_secondary
 
             read_key = (read_name, is_end1)
 
@@ -787,7 +791,7 @@ class SAMTaxonomy:
         self._last_read_human_sec       = 0
         self._last_organisms            = set()
 
-        self.format = '%40s\t%15s\t%20s\t%-20s\t' + '%6s\t' * 24 + '\n'
+        self.format = '%40s\t%15s\t%20s\t%-40s\t' + '%6s\t' * 24 + '\n'
 
         self.header = ('Sample','Group', 'Family', 'Organism',\
                         'AlP', 'AlS', 'AlHP', 'AlHS',\
@@ -970,7 +974,7 @@ class SAMTaxonomy:
             ref_span    = self.to_unit(entry[15][1] - entry[15][0])
 
 
-            data = self.sample_id, entry[0][:20], entry[1][:20], organism[:20],\
+            data = self.sample_id, entry[0][:20], entry[1][:20], organism[:40],\
                     algs[0], algs[1], \
                     algs_hum[0], algs_hum[1], both_mates[0], both_mates[1], \
                     hum_mates[0], hum_mates[1], \
@@ -1599,7 +1603,7 @@ class DNAmap(Mapper):
 
     samtools_path = cli.SwitchAttr(['--samtools_path'], str, mandatory=False,
                           help="Path to samtools executable",
-                          default='')
+                          default='samtools')
 
     temp_path = cli.SwitchAttr(['--temporary_path'], str, mandatory=False,
                           help="Path to temporary directory in which to generate temp files. All temp files with be automatically deleted after execution is complete.",
@@ -1665,6 +1669,10 @@ class DNAmap(Mapper):
                           help="Reads are fqz compressed and this argument specifies the path to fqzcomp's 'fqz_comp' binary",
                           default=False)
 
+    bam_input = cli.Flag(['--bam_input'],
+                         help="Input reads are contained in a single BAM file.",
+                         default=False)
+
     hit_filter = cli.SwitchAttr(
         ['-f', '--virana_hit_filter'], str, list=True, mandatory=False,
         help="Only generate hit groups that include at last one read mapping to a reference of this reference group.",
@@ -1687,13 +1695,17 @@ class DNAmap(Mapper):
 
     def get_command_line(self, temp_path):
 
-        command_line = [self.mapper_path] + ['mem', '-M', '-t', str(self.threads), os.path.join(self.index_dir, 'index')]
+        command_line = [self.mapper_path] + ['mem', '-t', str(self.threads), '-c', '2000', '-m' ,'50']
 
         if self.interleaved:
             command_line += ['-p']
 
+        command_line += [os.path.join(self.index_dir, 'index')]
+
         reads = []
-        if self.zipped:
+        if self.bam_input:
+            reads = ["'<%s bam2fq %s'" % (self.samtools_path, read) for read in self.reads]
+        elif self.zipped:
             reads = ["'<gzip -cd %s'" % read for read in self.reads]
         elif self.bzipped:
             reads = ["'<bzip2 -cd %s'" % read for read in self.reads]

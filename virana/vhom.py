@@ -6,6 +6,11 @@ import logging
 import tempfile
 import shutil
 import glob
+# import HTSeq
+# from GenomicInterval import GenomicInterval
+
+import collections
+from bx.intervals.cluster import ClusterTree
 
 import subprocess
 import bz2
@@ -128,6 +133,8 @@ class SequenceProxy:
         self.pathogen_family_filter = pathogen_family_filter
         self.complexity_filter = complexity_filter
 
+        self.failed_references = set()
+
     def add_hit_file(self, hit_file_path):
 
         logging.debug('SequenceProxy: adding new hit file %s' % hit_file_path)
@@ -175,6 +182,9 @@ class SequenceProxy:
                     self.hit_records[identifier] = hit_record
                 added += 1
 
+                if added % 10000 == 0:
+                    logging.debug('SequenceProxy: added %i hits' % added)
+
         logging.debug('SequenceProxy: hit file with %i entries added' % added)
 
     def get_read_record(self, read_id):
@@ -192,21 +202,30 @@ class SequenceProxy:
         if not self.reference_records:
             logging.debug('SequenceProxy: indexing reference records (this may take a while)')
             try:
-                self.reference_records = SeqIO.index(self.references_path, 'fasta')
-            except:
+                self.reference_records = SeqIO.to_dict(SeqIO.parse(self.references_path, 'fasta'))
+                logging.debug('SequenceProxy: stored %i reference records' % len(self.reference_records))
+                #self.reference_records = SeqIO.index(self.references_path, 'fasta')
+            except IOError:
                 logging.error('SequenceProxy: Unable to read from %s' % self.references_path)
 
         try:
+            # logging.debug('SequenceProxy: obtaining reference %s' % identifier)
             record = self.reference_records[identifier]
             return SeqRecord(record.seq, record.id, '', '')
 
-        except KeyError:
+        except:
+            if identifier not in self.failed_references:
+                logging.debug('SequenceProxy: could not obtain reference %s' % identifier)
+                self.failed_references.add(identifier)
             return None
 
     def get_transcript_record(self, identifier):
 
         if not self.human_transcripts_path:
             return None
+
+        logging.debug('SequenceProxy: obtaining transcript %s' % identifier)
+
 
         if not self.human_transcript_records:
             logging.debug('SequenceProxy: indexing human transcripts (this may take a while)')
@@ -228,7 +247,7 @@ class SequenceProxy:
         if not self.transcript_ranges:
             self._set_transcript_ranges()
 
-        interval = HTSeq.GenomicInterval(chromosome, start, end, '.')
+        interval = GenomicInterval(chromosome, start, end, '.')
         all_transcript_ids = set()
         for interval, transcript_ids in self.transcript_ranges[interval].steps():
             all_transcript_ids = all_transcript_ids.union(transcript_ids)
@@ -250,7 +269,7 @@ class SequenceProxy:
                 start, end = sorted((int(start), int(end)))
                 if start == end:
                     continue
-                interval = HTSeq.GenomicInterval(chromosome, start, end, ".")
+                interval = GenomicInterval(chromosome, start, end, ".")
                 self.transcript_ranges[interval] += transcript_id
 
 
@@ -356,6 +375,101 @@ class JalviewRunner:
         self._delete_tmp_dir()
 
 
+class RazerSRunner:
+
+    def __init__(self, razers_path=None, threads=8, identity=70, max_hits=1,\
+                    repeat_mask=15):
+
+        self.razers_path    = razers_path
+        self.threads        = threads
+        self.identity       = identity # less than 70 produces unstable results
+        self.max_hits       = max_hits
+        self.repeat_mask    = repeat_mask
+
+    def _align(self, reference_fasta_path, query_fasta_path, temporary_output_sam_path):
+
+        reference_fasta_path = os.path.abspath(
+            os.path.expandvars(reference_fasta_path))
+
+        query_fasta_path = os.path.abspath(
+            os.path.expandvars(query_fasta_path))
+
+        reference_record = SeqIO.parse(open(reference_fasta_path, "rU"), "fasta").next()
+
+        cline = [self.razers_path, '-tc', str(self.threads), '-i', str(self.identity),
+                 '-rr', '100', '-m', str(self.max_hits), '-o', temporary_output_sam_path,
+                 '-mr', '20', '-rl', str(self.repeat_mask),
+                 reference_fasta_path, query_fasta_path]
+
+        # Run razers3 process
+        logging.debug('RazerSRunner: Running razers3 with command line ' + ' '.join(cline))
+        razers3_process = subprocess.Popen(
+            ' '.join(cline), shell=True, stdout=PIPE, stderr=PIPE)
+
+        # Wait until alignment process has finished
+        results = razers3_process.communicate()
+
+        with open(temporary_output_sam_path) as sam_file:
+            # Yield alignments
+            for line in sam_file:
+                yield line
+            # Yield reference record
+            yield  '\t'.join([reference_record.id, '0', reference_record.id,
+                              '1', '255', str(len(reference_record)) + 'M',
+                              '*', '*', '*', reference_record.seq._data, '*'])
+
+    def align_to_bam_file(self, reference_fasta_path, query_fasta_path, output_bam_path, multiple=False, assert_record=None):
+
+        logging.debug('RazerSRunner: running on reference %s and query %s' %
+                     (reference_fasta_path, query_fasta_path))
+
+        output_sam_path = os.path.abspath(
+            os.path.expandvars(output_bam_path.replace('.bam', '.sam')))
+
+        output_bam_unsorted_path = os.path.abspath(
+            os.path.expandvars(output_bam_path + '.unsorted'))
+
+        logging.debug(
+            'RazerSRunner: aligning with output in temporary sam file %s' %
+            output_sam_path)
+
+        temporary_output_sam_path = output_sam_path.replace('.sam', '_only_alignments.sam')
+
+        with open(output_sam_path, 'w') as output_sam_handler:
+            for line in self._align(reference_fasta_path, query_fasta_path, temporary_output_sam_path):
+                output_sam_handler.write(line)
+
+        # Delete temporary sam file generated by the aligner
+        logging.debug(
+            'RazerSRunner: deleting temporary sam file %s' %
+            temporary_output_sam_path)
+        os.remove(temporary_output_sam_path)
+
+        logging.debug(
+            'RazerSRunner: transforming sam into unsorted bam file %s' %
+            output_bam_unsorted_path)
+        input_sam_handler = pysam.Samfile(output_sam_path, "r")
+        output_bam_file = pysam.Samfile(
+            output_bam_unsorted_path, "wb", template=input_sam_handler)
+
+        logging.debug(
+            'RazerSRunner: copying from sam file to bam file')
+        try:
+            for s in input_sam_handler:
+                output_bam_file.write(s)
+            output_bam_file.close()
+            logging.debug('RazerSRunner: sorting and indexing bam file %s' %
+                          output_bam_path)
+            pysam.sort(output_bam_unsorted_path,
+                       output_bam_path.replace('.bam', ''))
+
+            pysam.index(output_bam_path)
+        except:
+            logging.error(
+                'RazerSRunner: could not write bam file %s, possibly because no alignment found' %
+                output_bam_unsorted_path)
+
+
 class LastzRunner:
 
     def __init__(self, lastz_path=None, word_length=7):
@@ -378,8 +492,6 @@ class LastzRunner:
             'LastzRunner: aligning with output in temporary sam file %s' %
             output_sam_path)
 
-
-
         with open(output_sam_path, 'w') as output_sam_handler:
             for line in self._align(reference_fasta_path, query_fasta_path, multiple):
                 output_sam_handler.write(line)
@@ -393,16 +505,20 @@ class LastzRunner:
 
         logging.debug(
             'LastzRunner: copying from sam file to bam file')
-        for s in input_sam_handler:
-            output_bam_file.write(s)
-        output_bam_file.close()
+        try:
+            for s in input_sam_handler:
+                output_bam_file.write(s)
+            output_bam_file.close()
+            logging.debug('LastzRunner: sorting and indexing bam file %s' %
+                          output_bam_path)
+            pysam.sort(output_bam_unsorted_path,
+                       output_bam_path.replace('.bam', ''))
 
-        logging.debug('LastzRunner: sorting and indexing bam file %s' %
-                      output_bam_path)
-        pysam.sort(output_bam_unsorted_path,
-                   output_bam_path.replace('.bam', ''))
-
-        pysam.index(output_bam_path)
+            pysam.index(output_bam_path)
+        except:
+            logging.error(
+                'LastzRunner: could not write bam file %s, possibly because no alignment found' %
+                output_bam_unsorted_path)
 
     def align_to_samlines(self, reference_fasta_path, query_fasta_path, multiple=False):
 
@@ -646,14 +762,16 @@ class ConsensusRunner:
 
 class Group:
 
-    def __init__(self, family_name, qualified_family_name, sequence_proxy, tmp_dir=None):
+    def __init__(self, family_name, qualified_family_name, sequence_proxy, tmp_dir=None, complexity_filter=False):
 
         self.family_name = family_name
         self.qualified_family_name = qualified_family_name
         self.sequence_proxy = sequence_proxy
+        self.complexity_filter = complexity_filter
 
         self.regions = []
         self.fasta_path = None
+        self.region_counter = 0
 
         if tmp_dir:
             self.tmp_dir = tempfile.mkdtemp(
@@ -661,9 +779,14 @@ class Group:
         else:
             self.tmp_dir = tempfile.mkdtemp()
 
+    def __del__(self):
+
+        self._delete_temporary_dir()
+
     def add_region(self, read_id, pathogen_mapping_locations, human_mapping_locations):
 
-        region = Region(self.sequence_proxy, self.tmp_dir)
+        region = Region(self.sequence_proxy, self.region_counter, self.tmp_dir, self.complexity_filter)
+        self.region_counter += 1
 
         region.add_read(read_id)
 
@@ -677,7 +800,7 @@ class Group:
 
         self.regions.append(region)
 
-    def write_outputs(self, output_dir, lastz_runner, consensus_builder, jalview_runner):
+    def write_outputs(self, output_dir, aligner_runner, consensus_builder, jalview_runner):
 
         if not self.regions:
             logging.debug('Group %s: no regions for family' % self.family_name)
@@ -710,25 +833,33 @@ class Group:
             bam_path = os.path.join(
                 output_dir, 'region_%i_alignment.bam' % (i + 1))
             temporary_alignment_bam_path = region.get_alignment_bam_path(
-                lastz_runner, assert_record='Read')
-            shutil.copy(temporary_alignment_bam_path, bam_path)
+                aligner_runner, assert_record='Read')
 
-            shutil.copy(
-                temporary_alignment_bam_path + '.bai', bam_path + '.bai')
+            have_bam = True
+            try:
+                shutil.copy(temporary_alignment_bam_path, bam_path)
 
-            consensus_path = os.path.join(
-                output_dir, 'region_%i_consensus.fa' % (i + 1))
-            temporary_consensus_path = region.get_consensus_fasta_path(
-                consensus_builder, temporary_alignment_bam_path)
-            shutil.copy(temporary_consensus_path, consensus_path)
+                shutil.copy(
+                    temporary_alignment_bam_path + '.bai', bam_path + '.bai')
+            except IOError:
+                have_bam = False
+                logging.error('Group: Could not copy BAM file')
 
-            if jalview_runner:
+            if have_bam:
 
-                jalview_path = os.path.join(
-                    output_dir, 'region_%i_consensus.png' % (i + 1))
-                temporary_jalview_path = region.get_consensus_figure_path(
-                    jalview_runner, temporary_consensus_path)
-                shutil.copy(temporary_jalview_path, jalview_path)
+                consensus_path = os.path.join(
+                    output_dir, 'region_%i_consensus.fa' % (i + 1))
+                temporary_consensus_path = region.get_consensus_fasta_path(
+                    consensus_builder, temporary_alignment_bam_path)
+                shutil.copy(temporary_consensus_path, consensus_path)
+
+                if jalview_runner:
+
+                    jalview_path = os.path.join(
+                        output_dir, 'region_%i_consensus.png' % (i + 1))
+                    temporary_jalview_path = region.get_consensus_figure_path(
+                        jalview_runner, temporary_consensus_path)
+                    shutil.copy(temporary_jalview_path, jalview_path)
 
     def _delete_temporary_dir(self):
 
@@ -740,7 +871,7 @@ class Group:
 
     def filter_regions(self, min_region_length=50, min_read_number=5):
 
-        logging.debug('Group %s: filtering %i candidate regions' %
+        logging.info('Group %s: filtering %i candidate regions' %
                       (self.family_name, len(self.regions)))
 
 
@@ -749,6 +880,9 @@ class Group:
             if len(region) >= min_read_number and  region.get_longest_reference_length() >= min_region_length:
                 filtered.append(region)
                 logging.debug('Group: Region %s passed filtering' % region)
+            else:
+                pass
+                #logging.debug('Group: Region %s did not pass filtering with %i reads and length %i' % (region, len(region), region.get_longest_reference_length()))
 
         ordered = sorted(filtered, reverse=True)
 
@@ -757,7 +891,7 @@ class Group:
         else:
             length = 0
 
-        logging.debug(
+        logging.info(
             'Group %s: %i candidate regions remained after filtering, the longest is %i bp long' %
             (self.family_name, len(ordered), length))
 
@@ -765,7 +899,102 @@ class Group:
 
         return ordered
 
-    def merge_regions(self, max_gap_length):
+    # def merge_regions(self, max_gap_length):
+    #     """ Merges candidate regions into homologous regions. """
+
+    #     logging.debug('Group %s: merging %i candidate regions' %
+    #                   (self.family_name, len(self.regions)))
+
+    #     if len(self.regions) > 1:
+
+    #         intervals                   = HTSeq.GenomicArrayOfSets('auto',
+    #                                                                stranded=False)
+    #         interval_to_surrogate       = {}
+    #         surrogate_to_region         = {}
+
+    #         logging.debug('Group %s: constructing genomic index'
+    #                       % self.family_name)
+
+    #         interval_identifier = 0
+    #         for i, region in enumerate(self.regions):
+
+    #             if i % 1000 == 0:
+    #                 logging.debug('Group %s: %i candidate regions generated'
+    #                               % (self.family_name, i))
+
+    #             for reference_name, positions in region.references.iteritems():
+
+    #                 for start, end in positions:
+
+    #                     interval = HTSeq.GenomicInterval(reference_name, start, end, ".")
+    #                     intervals[interval] += interval_identifier
+    #                     interval_to_surrogate[interval_identifier] = region.identifier
+    #                     surrogate_to_region[region.identifier] = region
+    #                     interval_identifier += 1
+
+    #         candidates      = set(self.regions)
+    #         not_mergable    = []
+
+    #         while len(candidates) > 1:
+
+    #             merged     = set()
+    #             source     = candidates.pop()
+
+    #             for reference_name, positions in source.references.items():
+
+    #                 # Skip comparisons based solely on identical human references
+    #                 if ';Homo_sapiens;' in reference_name:
+    #                     continue
+
+    #                 for start, end in list(positions): # Avoids iterating over changed set
+    #                     source_interval = HTSeq.GenomicInterval(reference_name,
+    #                                                      max(0, start-max_gap_length)+1,
+    #                                                      end+max_gap_length-1, ".")
+    #                     target_surrogates = set()
+    #                     for target_interval in intervals[source_interval].steps():
+
+    #                         for interval_identifier in target_interval[1]:
+    #                             target_surrogate    = interval_to_surrogate[interval_identifier]
+    #                             target              = surrogate_to_region[target_surrogate]
+    #                             if target != source and target not in merged:
+    #                                 source.merge(target)
+    #                                 source.clean_references(max_gap_length)
+    #                                 target_surrogates.add(target_surrogate)
+
+    #                                 # Store the identity of the merged region in order to not merge it again
+    #                                 merged.add(target)
+
+    #                     # Let the intervals point to the newly enlarged region
+    #                     for target_surrogate in target_surrogates:
+    #                         surrogate_to_region[target_surrogate] = source
+
+    #             if merged:
+    #                 for target in merged:
+    #                     try:
+    #                         candidates.remove(target)
+    #                     except KeyError:
+    #                         pass
+    #                 candidates.add(source)
+
+    #                 logging.debug('Group %s: merged regions. %i candidate regions remaining for merging' % (self.family_name, len(candidates)))
+
+    #             else:
+
+    #                 not_mergable.append(source)
+    #                 #logging.debug('Group %s: not merged a region. %i candidate regions remaining' % (self.family_name, len(candidates)))
+
+    #         results = not_mergable + list(candidates)
+
+    #         logging.debug('Group %s: merged into %i regions' %
+    #                       (self.family_name, len(results)))
+
+    #         self.regions = results
+
+    #     else:
+    #         logging.debug(
+    #             'Group %s: found only 1 region, no merging necessary' % self.family_name)
+
+    def merge_regions(self, max_gap_length, min_region_length, min_read_number):
         """ Merges candidate regions into homologous regions. """
 
         logging.debug('Group %s: merging %i candidate regions' %
@@ -773,39 +1002,77 @@ class Group:
 
         if len(self.regions) > 1:
 
-            potentially_mergable = self.regions
-            not_mergable = []
+            cluster_trees = collections.defaultdict(lambda:
+                                ClusterTree(max_gap_length, min_read_number))
 
-            while len(potentially_mergable) > 1:
+            logging.debug('Group %s: constructing interval trees'
+                          % self.family_name)
 
+            identifier_to_region = {}
+
+            for i, region in enumerate(self.regions):
+
+                if i % 1000 == 0:
+                    logging.debug('Group %s: %i intitial read mappings inserted'
+                                  % (self.family_name, i))
+
+                identifier_to_region[region.identifier] = region
+
+                for reference_name, positions in region.references.iteritems():
+
+                    # Region overlap relies  only on pathogen references
+                    if ';Homo_sapiens;' in reference_name:
+                        continue
+
+                    for start, end in positions:
+                        cluster_trees[reference_name].insert(start, end, region.identifier)
+
+            logging.debug('Group %s: %i intitial read mappings inserted'
+                          % (self.family_name, len(self.regions)))
+
+            # Convert defaultidict to dict to avoid side effects later on
+            cluster_trees = dict(cluster_trees)
+
+            # Get initial clusters
+            clusters = []
+            for reference_name, cluster_tree in cluster_trees.items():
+                for start, end, identifiers in cluster_tree.getregions():
+                    if (end - start) >= min_region_length:
+                        clusters.append(set(identifiers))
+                        #logging.debug('Group %s: Acceppted clustered region with length %i' % (self.family_name, end-start))
+
+                    else:
+                        pass
+                        #logging.debug('Group %s: Excluding clustered region due to insufficient length' % self.family_name)
+
+            # Merge clusters based on common region identifiers
+            identifiers_merged = []
+            while clusters:
+                first, rest = clusters[0], clusters[1:]
                 merged = False
-                current = potentially_mergable[0]
-                compared_to = potentially_mergable[1:]
-
-                for region in compared_to:
-                    if region.overlaps(current, max_gap_length):
-                        region.merge(current)
-                        region.clean_references(max_gap_length)
-                        # logging.debug('Group %s: merged region %s into region %s' % (self.family_name, str(current), str(region)))
-                        potentially_mergable = compared_to
+                clusters = []
+                for s in rest:
+                    if s and s.isdisjoint(first):
+                        clusters.append(s)
+                    else:
+                        first |= s
                         merged = True
-                        break
+                if merged:
+                    clusters.append(first)
+                else:
+                    identifiers_merged.append(first)
 
-                if not merged:
-                    not_mergable.append(current)
-                    potentially_mergable = compared_to
-                    # logging.debug('Group %s: not merged a region. %i potentially mergable candidate regions remaining' % (self.family_name, len(potentially_mergable)))
+            regions_merged = []
+            for merged_identifiers in identifiers_merged:
+                regions = [identifier_to_region[i] for i in merged_identifiers]
+                region = reduce(lambda region1, region2: region1.merge(region2), regions)
+                region.clean_references(max_gap_length)
+                #logging.debug('Group %s: generated meged region %s' % (self.family_name, str(region)))
+                regions_merged.append(region)
 
-            results = not_mergable + potentially_mergable
+            logging.info('Group %s: merged %i intital regions into %i merged regions.' % (self.family_name, len(self.regions), len(regions_merged)))
 
-            logging.debug('Group %s: merged into %i regions' %
-                          (self.family_name, len(results)))
-
-            self.regions = results
-
-        else:
-            logging.debug(
-                'Group %s: found only 1 region, no mergin necessary' % self.family_name)
+            self.regions = regions_merged
 
     def add_transcripts_to_regions(self):
 
@@ -846,13 +1113,14 @@ class GroupGenerator:
         Groups.
     """
 
-    def __init__(self, sequence_proxy, reference_database_filter=None, pathogen_family_filter=None, tmp_dir=None):
+    def __init__(self, sequence_proxy, reference_database_filter=None, pathogen_family_filter=None, tmp_dir=None, complexity_filter=False):
 
         self.sequence_proxy = sequence_proxy
 
         self.tmp_path = tmp_dir
         self.reference_database_filter = reference_database_filter
         self.pathogen_family_filter = pathogen_family_filter
+        self.complexity_filter = complexity_filter
 
         self.groups = {}
 
@@ -864,7 +1132,7 @@ class GroupGenerator:
 
     def get_groups(self, min_read_number=5):
 
-        logging.debug(
+        logging.info(
             'GroupGenerator: generating groups from %i hit entries, please wait...' %
             len(self.sequence_proxy.hit_records))
 
@@ -910,6 +1178,8 @@ class GroupGenerator:
             if not pathogen_families:
                 continue
 
+            number_regions = 0
+
             # Process the hits to different pathogen families
             for (reference_database, family), pathogen_locations in pathogen_families.iteritems():
 
@@ -920,18 +1190,23 @@ class GroupGenerator:
                     group = self.groups[qualified_family_name]
                 else:
                     group = Group(family, qualified_family_name,
-                                  self.sequence_proxy, self.tmp_dir)
+                                  self.sequence_proxy, self.tmp_dir, self.complexity_filter)
                     self.groups[qualified_family_name] = group
 
                 group.add_region(
                     read_id, pathogen_locations, human_mapping_locations)
+
+                number_regions += 1
+
+                if number_regions % 10000 == 0:
+                    logging.info('GroupGenerator: added %i initial regions' % number_regions)
 
         # Exclude groups that have collected to few reads
         for qualified_family_name, group in self.groups.items():
             if len(group.regions) < min_read_number:
                 del self.groups[qualified_family_name]
             else:
-                logging.debug(
+                logging.info(
                     'GroupGenerator: made new group for family %s' % qualified_family_name)
 
         return self.groups
@@ -939,14 +1214,17 @@ class GroupGenerator:
 
 class Region:
 
-    def __init__(self, sequence_proxy, tmp_dir=None):
+    def __init__(self, sequence_proxy, identifier, tmp_dir=None, complexity_filter=False):
 
         self.sequence_proxy = sequence_proxy
+        self.identifier = identifier
 
         self.references = defaultdict(set)
         self.reads = set()
         self.transcripts = set()
         self.length = None
+
+        self.complexity_filter = complexity_filter
 
         self.sorted_reference_positions = None
 
@@ -957,13 +1235,34 @@ class Region:
         self.alignment_sam_path = None
         self.consensus_fasta_path = None
 
+    def __hash__(self):
+        return self.identifier
+
+    def __eq__(self, other):
+
+        if self.identifier == other.identifier:
+            return True
+        else:
+            return False
+
     def add_reference(self, name, start, end):
 
-        # logging.debug('Region: added reference %s (%i-%i)' % (name, start, end))
+        #logging.debug('Region: adding reference %s (%i-%i)' % (name, start, end))
 
         assert start < end
         self.length = None
         self.longest_reference_id = None
+
+        if self.complexity_filter:
+            record = self.sequence_proxy.get_reference_record(name)
+
+            if record:
+                record = record[start-1:end]
+                avg_compression = float(len(compress(record.seq._data)))/len(record)
+                if avg_compression < 0.5:
+                    #logging.debug('Region: reference position %s (%i-%i) has low complexity, skipping' % (name, start, end))
+                    return
+
         self.references[name].add((start, end))
 
         # self.sorted_reference_positions = None
@@ -999,6 +1298,10 @@ class Region:
         else:
             return 0
 
+    def __del__(self):
+
+        self._delete_temporary_dir()
+
     def _delete_temporary_dir(self):
 
         self.unaligned_fasta_path = None
@@ -1022,13 +1325,16 @@ class Region:
             pathogen_positions = []
 
             # Skip the longest reference ([1:]) since we use that one as the alignment reference anyways
+            logging.debug('Region: Sorting references and reads')
             for length, identifier, start, end in list(self.get_sorted_reference_positions())[1:]:
                 if ';Homo_sapiens;' in identifier:
                     human_positions.append((identifier, start, end))
                 else:
                     pathogen_positions.append((identifier, start, end))
 
+            logging.debug('Region: Obtaining references and writing to file')
             for identifier, start, end in pathogen_positions + human_positions:
+                # logging.debug('Region: Obtaining reference %s (%i-%i)' % (identifier, start, end))
                 record = self.sequence_proxy.get_reference_record(identifier)
                 if record:
                     record = SeqRecord(record.seq, record.id, '', '')
@@ -1039,6 +1345,7 @@ class Region:
                     logging.debug('Region: could not retrieve reference %s, skipping' % identifier)
 
             # Write full-length transcripts
+            logging.debug('Region: Obtaining transcripts and writing to file')
             for identifier in self.transcripts:
                 record = self.sequence_proxy.get_transcript_record(identifier)
                 if record:
@@ -1049,6 +1356,7 @@ class Region:
                         'Region: could not retrieve reference %s' % identifier)
 
             # Write reads
+            logging.debug('Region: Obtaining reads and writing to file')
             for read_id in sorted(self.reads):
                 record = self.sequence_proxy.get_read_record(read_id)
                 if record:
@@ -1098,7 +1406,7 @@ class Region:
 
         logging.debug(
             'Region: identified longest reference record %s, start %i, end %i' %
-            (str(longest_ref_record).replace('\n',' '), longest_ref_start, longest_ref_end))
+            (longest_ref_record.id, longest_ref_start, longest_ref_end))
 
         SeqIO.write([longest_ref_record[longest_ref_start-1:longest_ref_end]], reference_path, "fasta")
 
@@ -1166,6 +1474,8 @@ class Region:
         for read in other.reads:
             self.add_read(read)
 
+        return self
+
     def clean_references(self, max_gap_length):
 
         for reference, reflist in self.references.iteritems():
@@ -1183,6 +1493,9 @@ class Region:
                     saved[1] = item[1]
             result.add(tuple(saved))
             self.references[reference] = result
+
+        self.length = None
+        self.sorted_reference_positions = None
 
     def to_sorted_record_ids(self):
 
@@ -1261,6 +1574,9 @@ class RegionStatistics:
 
     def _add_sequence(self, qualified_name, region_id,
                       longest_human_reference, longest_pathogen_reference, record):
+
+        if not longest_pathogen_reference:
+            return
 
         state = 'pathogen'
         if longest_human_reference:
@@ -1341,9 +1657,13 @@ class RegionRunner(cli.Application):
         ['-v', '--virana_hits'], str, list=True, mandatory=True,
         help="Add hit file for analysis. May be supplied multiple times. May contain globbing characters that are expanded to matchin file names.")
 
-    lastz_path = cli.SwitchAttr(['-z', '--lastz_path'], str, mandatory=False,
+    lastz_path = cli.SwitchAttr(['--lastz_path'], str, mandatory=False,
                                 help="Path to lastz executable",
-                                default='lastz')
+                                default=None)
+
+    razers3_path = cli.SwitchAttr(['--razers3_path'], str, mandatory=False,
+                                help="Path to razers3 executable",
+                                default=None)
 
     jalview_jar_dir = cli.SwitchAttr(
         ['-j', '--jalview_jar_dir'], str, mandatory=False,
@@ -1428,18 +1748,33 @@ class RegionRunner(cli.Application):
         generator = GroupGenerator(proxy,
                                    reference_database_filter=self.reference_database_filter,
                                    pathogen_family_filter=self.pathogen_family_filter,
-                                   tmp_dir=self.tmp_dir)
+                                   tmp_dir=self.tmp_dir, complexity_filter=self.complexity_filter)
         groups = generator.get_groups(min_read_number=self.min_read_number)
 
         # Prepare analysis modules ('runners') for postprocessing homologous
         # regions
         consensus = ConsensusRunner(ambiguity_cutoff=self.ambiguity_cutoff)
 
-        if not which(self.lastz_path) or not which(self.lastz_path):
-            logging.error('Invalid path to lastz: %s' % self.lastz_path)
-            sys.exit(1)
+        aligner = None
 
-        lastz = LastzRunner(self.lastz_path, word_length=self.word_length)
+        if self.lastz_path:
+            if not which(self.lastz_path):
+                logging.error('Invalid path to lastz: %s' % self.lastz_path)
+                sys.exit(1)
+            else:
+                aligner = LastzRunner(self.lastz_path, word_length=self.word_length)
+
+        if not aligner:
+            if self.razers3_path:
+                if not which(self.razers3_path):
+                    logging.error('Invalid path to razers3: %s' % self.razers3_path)
+                    sys.exit(1)
+                else:
+                    aligner = RazerSRunner(self.razers3_path)
+
+        if not aligner:
+            logging.error('Neither lastz not razers3 path specified. Please specify at elast one aligner.')
+            sys.exit(1)
 
         if self.jalview_jar_dir:
 
@@ -1456,14 +1791,14 @@ class RegionRunner(cli.Application):
 
         # Make homologous regions within each homologous group
         for name, group in groups.iteritems():
-            group.merge_regions(max_gap_length=self.max_gap_length)
+            group.merge_regions(max_gap_length=self.max_gap_length, min_region_length=self.min_region_length, min_read_number=self.min_read_number)
             group.filter_regions(
                 min_region_length=self.min_region_length, min_read_number=self.min_read_number)
 
             if self.cdna_path:
                 group.add_transcripts_to_regions()
 
-            group.write_outputs(self.output_dir, lastz, consensus, jalview)
+            group.write_outputs(self.output_dir, aligner, consensus, jalview)
             group._delete_temporary_dir()
 
         # Run statistics on all homologous regions
