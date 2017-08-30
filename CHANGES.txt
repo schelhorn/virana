@@ -1,3 +1,0 @@
-v1.1.0, 26.10.2013 -- Release 1.1, many new features and performance improvements. See README.md
-v1.0.0, 30.09.2013 -- Initial release.
-
