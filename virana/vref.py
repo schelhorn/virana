@@ -132,12 +132,17 @@ class HumanTranscriptDownloader(DataDownloader):
         of their exons on the human genome within their description line.
     """
 
-    def __init__(self):
+    def __init__(self, build):
 
         self.ensemble_host_name  = 'ftp.ensembl.org'
-        self.gtf_path            = '/pub/current_gtf/homo_sapiens'
+        self.gtf_path            = '/pub/current_gtf/homo_sapiens/'
         self.cdna_path           = '/pub/current_fasta/homo_sapiens/cdna'
         self.ncrna_path          = '/pub/current_fasta/homo_sapiens/ncrna'
+        self.build               = build
+        if self.build == '37':
+            self.gtf_path            = '/pub/release-75/gtf/homo_sapiens/'
+            self.cdna_path           = '/pub/release-75//fasta/homo_sapiens/cdna'
+            self.ncrna_path          = '/pub/release-75//fasta/homo_sapiens/ncrna'
 
         super(HumanTranscriptDownloader, self).__init__(self.ensemble_host_name, self.gtf_path)
 
@@ -150,25 +155,29 @@ class HumanTranscriptDownloader(DataDownloader):
         """ Obtains gtf annotations for human transcripts from ensemble and
             caches them in memory.
         """
+        #logging.debug('enter _cache_annotations')
 
         self.host.chdir(self.gtf_path)
 
         entries = self.host.listdir(self.host.curdir)
 
         for entry in entries:
+            #logging.debug(entry)
 
             if self.host.path.isfile(entry):
                 if entry.startswith('Homo_sapiens.') and entry.endswith('.gtf.gz'):
-                    logging.debug('Processing cDNA annotations %s' % entry)
+                    logging.debug('Processing cDNA annotations %s' % self.gtf_path + '/' + entry)
 
                     with self.host.open(self.gtf_path + '/' + entry, 'rb') as zipped_handle:
                         remote_content = BytesIO(zipped_handle.read())
 
                         gzipfile = gzip.GzipFile(fileobj=remote_content)
                         for i, gtf_line in enumerate(gzipfile):
+                            #logging.debug(gtf_line)
                             if i % 100000 == 0:
                                 logging.debug('Cached %i human transcript annotations' % i)
 
+                            #logging.debug('entering _add_annotation')
                             self._add_annotation(gtf_line)
                         gzipfile.close()
 
@@ -180,6 +189,7 @@ class HumanTranscriptDownloader(DataDownloader):
         """
 
         for subpath in [self.cdna_path, self.ncrna_path]:
+            #logging.debug('in'+subpath)
 
             self.host.chdir(subpath)
 
@@ -202,20 +212,23 @@ class HumanTranscriptDownloader(DataDownloader):
                                     if i % 100000 == 0:
                                         logging.debug('Retrieved %i human transcripts' % i)
 
-                                    record.description = ''
+                                    #record.description = ''
+                                    #logging.debug('record = '+record)
 
                                     yield record
                             gzipfile.close()
 
     def _add_annotation(self, gtf_line):
         """ Parses gtf annotations and stores them in memory. """
+        #logging.debug("entering _add_annotation")
 
         if gtf_line[0] == '#':
             return
 
         fields = gtf_line.strip().split('\t')
-        chromosome, source, feature, start, end, score, strands, frame, attributes\
-                                                                    = fields
+        #logging.debug(fields)
+        chromosome, source, feature, start, end, score, strands = fields[:7]
+        attributes = fields[-1]
 
         start, end = sorted([int(start), int(end)])
 
@@ -235,12 +248,13 @@ class HumanTranscriptDownloader(DataDownloader):
 
     def get_fasta_records(self):
         """ Yields annotated fasta records of human transcripts. """
-
-        logging.debug('Caching annotations')
+        #logging.debug("get_fasta_records")
+        #logging.debug('Caching annotations')
         self._cache_annotations()
 
         logging.debug('Downloading and annotating transcripts')
         for record in self._get_raw_transcripts():
+            #logging.debug(record)
             transcript_id   = record.id
 
             if transcript_id in self.regions:
@@ -256,13 +270,13 @@ class HumanTranscriptDownloader(DataDownloader):
                     gene_name = list(gene_names)[0]
                 else:
                     gene_name = transcript_id
-
+                #logging.debug(record)
                 yield self._get_fasta_record(record, self.group , 'Hominidae', 'Homo_sapiens', gene_name, sub_identifier=transcript_id, description=description)
 
 class RefSeqDownloader(DataDownloader):
     """ Generic downloader that known how to interpret and parse genbank records """
 
-    def __init__(self, group):
+    def __init__(self, group, build):
 
         self.refseq_host_name  = 'ftp.ncbi.nih.gov'
         self.base_path         = '/genomes/' + group
@@ -407,10 +421,13 @@ class RefSeqDownloader(DataDownloader):
 
 class HumanGenomeDownloader(DataDownloader):
 
-    def __init__(self):
+    def __init__(self, build):
 
         self.ensemble_host_name  = 'ftp.ensembl.org'
-        self.base_path           = '/pub/current_fasta/homo_sapiens/dna'
+        self.base_path           = '/pub/current_fasta/homo_sapiens/'
+        self.build               = build
+        if self.build == '37':
+            self.base_path           = '/pub/release-75/fasta/homo_sapiens/dna'
 
         super(HumanGenomeDownloader, self).__init__(self.ensemble_host_name, self.base_path)
 
@@ -445,10 +462,12 @@ class HumanGenomeDownloader(DataDownloader):
 
 class UniVecDownloader(DataDownloader):
 
-    def __init__(self):
-
+    def __init__(self, build):
         self.univec_host_name  = 'ftp.ncbi.nih.gov'
         self.base_path         = '/pub/UniVec'
+        self.build             = build
+        if self.build == '37':
+            self.base_path         = '/pub/UniVec'
 
         super(UniVecDownloader, self).__init__(self.univec_host_name, self.base_path)
 
@@ -513,6 +532,8 @@ class References(cli.Application):
               'Bacteria_DRAFT', 'Homo_sapiens',
               'Viruses', 'UniVec', 'Plasmids',
               'Protozoa', 'rRNA', 'Homo_sapiens_cDNA']
+    
+    build = cli.SwitchAttr(['-g', '--genome_build'], mandatory=False, default='38', help="Provisions records based on the genome build provided please provide 37 or 38; default is set to GrCh38")
 
     references = cli.SwitchAttr(['-r', '--reference'],
                                    cli.Set(*valid_references, case_sensitive=True),
@@ -549,17 +570,18 @@ class References(cli.Application):
         for reference in self.references:
 
             if reference == 'UniVec':
-                downloader = UniVecDownloader()
+                downloader = UniVecDownloader(self.build)
             elif reference == 'Homo_sapiens':
-                downloader = HumanGenomeDownloader()
+                downloader = HumanGenomeDownloader(self.build)
             elif reference == 'rRNA':
                 downloader = SilvaDownloader()
             elif reference == 'Homo_sapiens_cDNA':
-                downloader = HumanTranscriptDownloader()
+                downloader = HumanTranscriptDownloader(self.build)
             else:
                 downloader = RefSeqDownloader(group=reference)
 
             for record in downloader.get_fasta_records():
+                #print record
                 SeqIO.write([record], output_file, "fasta")
 
         output_file.close()

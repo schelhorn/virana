@@ -6,8 +6,8 @@ import logging
 import tempfile
 import shutil
 import glob
-# import HTSeq
-# from GenomicInterval import GenomicInterval
+import HTSeq
+from HTSeq import GenomicInterval
 
 import collections
 from bx.intervals.cluster import ClusterTree
@@ -801,6 +801,7 @@ class Group:
         self.regions.append(region)
 
     def write_outputs(self, output_dir, aligner_runner, consensus_builder, jalview_runner):
+        logging.debug('enter write_outputs')
 
         if not self.regions:
             logging.debug('Group %s: no regions for family' % self.family_name)
@@ -837,10 +838,16 @@ class Group:
 
             have_bam = True
             try:
-                shutil.copy(temporary_alignment_bam_path, bam_path)
+                logging.debug(temporary_alignment_bam_path)
+                logging.debug(bam_path)
+                try:
+                    shutil.copy(temporary_alignment_bam_path, bam_path)
 
-                shutil.copy(
-                    temporary_alignment_bam_path + '.bai', bam_path + '.bai')
+                    shutil.copy(
+                        temporary_alignment_bam_path + '.bai', bam_path + '.bai')
+                except TypeError:
+                    have_bam = False
+                    logging.error('Could not copy BAM file %s since temporary bam file is of %s type', bam_path, str(temporary_alignment_bam_path))
             except IOError:
                 have_bam = False
                 logging.error('Group: Could not copy BAM file')
@@ -1382,44 +1389,75 @@ class Region:
         return self.unaligned_fasta_path
 
     def _align_fastas(self, aligner, assert_record=None):
+        logging.debug('_align_fastas')
+        logging.debug(aligner)
 
         # Write reference fasta
         queries_path = self.get_unaligned_fasta_path()
+        logging.debug(queries_path)
         reference_path = os.path.join(self.get_tmp_path(), 'reference.fa')
-
+        logging.debug(reference_path)
         logging.debug(
             'Region: writing longest reference to %s' % reference_path)
 
         # Get longest reference record for which we have a sequence available
         longest_ref_entry   = []
+        logging.debug('Get longest reference record for which we have a sequence available')
         for entry in self.get_sorted_reference_positions():
-            if self.sequence_proxy.get_reference_record(entry[1]) is not None:
-                longest_ref_entry = entry
-                break
+            logging.debug(self.sequence_proxy.get_reference_record(entry[1]))
+            if self.sequence_proxy.get_reference_record(entry[1]):
+                if self.sequence_proxy.get_reference_record(entry[1]) is not None:
+                    #logging.debug(entry)
+                    longest_ref_entry = entry
+                    break
+                else:
+                    continue
+            else:
+                logging.debug('printing false')
+                continue
 
-        assert longest_ref_entry[1], 'Region: cannot derive longest reference, aborting.'
+        logging.debug(longest_ref_entry)
+        try:
+            assert longest_ref_entry[1], 'Region: cannot derive longest reference, aborting.'
+        except IndexError:
+            logging.debug('IndexError')
+            logging.debug(entry)
+            longest_ref_entry = entry
+            logging.debug(longest_ref_entry)
+        
 
         longest_ref_id      = longest_ref_entry[1]
         longest_ref_start   = longest_ref_entry[2]
         longest_ref_end     = longest_ref_entry[3]
-        longest_ref_record  = self.sequence_proxy.get_reference_record(longest_ref_id)
+        try:
+            longest_ref_record  = self.sequence_proxy.get_reference_record(longest_ref_id)
+        
 
-        logging.debug(
-            'Region: identified longest reference record %s, start %i, end %i' %
-            (longest_ref_record.id, longest_ref_start, longest_ref_end))
+            logging.debug(
+                'Region: identified longest reference record %s, start %i, end %i' %
+                (longest_ref_record.id, longest_ref_start, longest_ref_end))
 
-        SeqIO.write([longest_ref_record[longest_ref_start-1:longest_ref_end]], reference_path, "fasta")
+            SeqIO.write([longest_ref_record[longest_ref_start-1:longest_ref_end]], reference_path, "fasta")
+            # Do alignment
+            bam_path = os.path.join(self.get_tmp_path(), 'aligned.bam')
+            logging.debug(
+                'Region: starting alignment using queries %s to sam path %s' %
+                (queries_path, bam_path))
 
-        # Do alignment
-        bam_path = os.path.join(self.get_tmp_path(), 'aligned.bam')
-        logging.debug(
-            'Region: starting alignment using queries %s to sam path %s' %
-            (queries_path, bam_path))
+            aligner.align_to_bam_file(
+                reference_path, queries_path, bam_path, assert_record=assert_record)
 
-        aligner.align_to_bam_file(
-            reference_path, queries_path, bam_path, assert_record=assert_record)
+            logging.debug(bam_path)
+            return bam_path
+        except AttributeError:
+            # Do alignment
+            logging.debug('AttributeError')
+            bam_path = None
+            logging.debug(bam_path)
+            return bam_path
 
-        return bam_path
+
+        
 
     def _build_alignment_consensus(self, consensus_builder, alignment_bam_path):
 
@@ -1431,8 +1469,10 @@ class Region:
         return consensus_path
 
     def get_alignment_bam_path(self, aligner, assert_record=None):
-
-        return self._align_fastas(aligner, assert_record)
+        logging.debug('...get_alignment_bam_path')
+        bam_path = self._align_fastas(aligner, assert_record)
+        if bam_path is not None:
+            return bam_path
 
     def get_consensus_fasta_path(self, consensus_builder, alignment_bam_path):
 
